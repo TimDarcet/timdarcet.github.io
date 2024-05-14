@@ -10,8 +10,8 @@ Currently, I'm a PhD student at FAIR Paris (Meta) and Inria, advised by Maxime O
 ICLR 2024 Outstanding paper award, for "Vision transformers need registers"
 
 ## Socials / contacts
-(twitter.com/timdarcet)[twitter.com/timdarcet]
+[twitter.com/timdarcet](twitter.com/timdarcet)
 
-(linkedin.com/timdarcet)[linkedin.com/timdarcet]
+[linkedin.com/timdarcet](linkedin.com/timdarcet)
 
 timothee dot darcet at gmail dot com
