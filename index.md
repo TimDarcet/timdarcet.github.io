@@ -12,6 +12,6 @@ ICLR 2024 Outstanding paper award, for "Vision transformers need registers"
 ## Socials / contacts
 [twitter.com/timdarcet](https://www.twitter.com/timdarcet)
 
-[linkedin.com/in/timdarcet](https://www.linkedin.com/timdarcet)
+[linkedin.com/in/timdarcet](https://www.linkedin.com/in/timdarcet)
 
 timothee dot darcet at gmail dot com
