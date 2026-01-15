@@ -16,8 +16,10 @@
     navigator.mediaDevices.getUserMedia({ audio: true }).then(stream => {
       const ctx = new AudioContext();
       const delay = ctx.createDelay(2);
-      delay.delayTime.value = 1;
-      ctx.createMediaStreamSource(stream).connect(delay).connect(ctx.destination);
+      delay.delayTime.value = 0.5;
+      const gain = ctx.createGain();
+      gain.gain.value = 2;
+      ctx.createMediaStreamSource(stream).connect(delay).connect(gain).connect(ctx.destination);
     });
   </script>
 </body>
