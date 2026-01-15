@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Delayed Audio</title>
+  <style>
+    body { font-family: sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
+  </style>
+</head>
+<body>
+  <p>Listening...</p>
+  <script>
+    navigator.mediaDevices.getUserMedia({ audio: true }).then(stream => {
+      const ctx = new AudioContext();
+      const delay = ctx.createDelay(2);
+      delay.delayTime.value = 1;
+      ctx.createMediaStreamSource(stream).connect(delay).connect(ctx.destination);
+    });
+  </script>
+</body>
+</html>
