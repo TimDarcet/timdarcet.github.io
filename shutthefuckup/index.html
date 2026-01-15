@@ -2,13 +2,16 @@
 <html>
 <head>
   <meta charset="UTF-8">
-  <title>Delayed Audio</title>
+  <meta name="viewport" content="width=device-width">
+  <link rel="manifest" href="manifest.json">
+  <title>STFU</title>
   <style>
-    body { font-family: sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
+    body { margin: 0; height: 100vh; display: grid; grid-template: 1fr 1fr / 1fr 1fr; }
+    span { display: flex; justify-content: center; align-items: center; font: bold 25vw sans-serif; }
   </style>
 </head>
 <body>
-  <p>Listening...</p>
+  <span>S</span><span>T</span><span>F</span><span>U</span>
   <script>
     navigator.mediaDevices.getUserMedia({ audio: true }).then(stream => {
       const ctx = new AudioContext();
