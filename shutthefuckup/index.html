@@ -7,12 +7,13 @@
   <title>STFU</title>
   <style>
     body { margin: 0; height: 100vh; display: grid; grid-template: 1fr 1fr / 1fr 1fr; }
-    span { display: flex; justify-content: center; align-items: center; font: bold 25vw sans-serif; }
+    span { display: flex; justify-content: center; align-items: center; font: bold 45vmin sans-serif; line-height: 1; }
   </style>
 </head>
 <body>
   <span>S</span><span>T</span><span>F</span><span>U</span>
   <script>
+    navigator.serviceWorker?.register('sw.js');
     navigator.mediaDevices.getUserMedia({ audio: true }).then(stream => {
       const ctx = new AudioContext();
       const delay = ctx.createDelay(2);
