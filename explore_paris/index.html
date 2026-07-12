@@ -5,12 +5,22 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
 <title>Paris Memory — Streets</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,700&display=swap" rel="stylesheet">
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  html, body { height: 100%; overflow: hidden; background: #e9edf2;
+  html, body { height: 100%; height: 100dvh; overflow: hidden; background: #e9edf2;
                font-family: ui-sans-serif, system-ui, "Segoe UI", Roboto, sans-serif; }
   #map { position: absolute; inset: 0; z-index: 0; background: #e9edf2; }
   #fog { position: absolute; inset: 0; z-index: 400; pointer-events: none; }
+  /* depth: soft inner shadow so the fogged map feels recessed under the clear areas */
+  #vignette { position: absolute; inset: 0; z-index: 401; pointer-events: none;
+    box-shadow: inset 0 0 180px 40px rgba(40,30,12,.34), inset 0 0 60px rgba(30,22,10,.18); }
+  /* paper grain over everything, very subtle (no blend-mode — avoids per-frame recompositing) */
+  #grain { position: absolute; inset: 0; z-index: 402; pointer-events: none; opacity: .06;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E"); }
+  #fx { position: absolute; inset: 0; z-index: 590; pointer-events: none; display: none; }
   .leaflet-container { background: #e9edf2; }
   .leaflet-control-attribution { font-size: 10px; background: rgba(255,255,255,.7); }
   #hud { position: fixed; left: 0; right: 0; bottom: 0; z-index: 500;
@@ -29,7 +39,7 @@
   #reset { color: #c5221f; } #reset:hover { border-color: #c5221f; }
   #stats { display: flex; gap: 18px; flex-wrap: wrap; justify-content: center; font-size: 13px; color: #eef3f9;
            font-variant-numeric: tabular-nums; text-shadow: 0 1px 3px rgba(0,0,0,.6); }
-  #stats b { color: #fff; font-weight: 700; }
+  #stats b { color: #fff; font-weight: 700; font-family: "Fraunces", Georgia, serif; font-size: 15px; }
   #msg { position: fixed; left: 50%; top: 18px; transform: translateX(-50%); z-index: 600;
          padding: 9px 18px; border-radius: 999px; font-size: 14px; font-weight: 600;
          opacity: 0; transition: opacity .25s; pointer-events: none; white-space: nowrap;
@@ -43,14 +53,88 @@
            padding: 8px 10px; font-size: 12px; font-family: ui-monospace, monospace; box-shadow: 0 4px 14px rgba(0,0,0,.4); }
   #debug .dh { font-weight: 700; color: #c4b5fd; margin-bottom: 4px; font-family: ui-sans-serif, system-ui; }
   #debug .dt { color: #ff9aa6; } #debug .dd { color: #7dd8a0; }
-  #title b { font-weight: 800; letter-spacing: 2px; }
+  #cloudpanel { position: fixed; left: 14px; bottom: 96px; z-index: 560; display: none; width: 240px;
+           background: rgba(20,28,40,.94); color: #dde6f2; border: 1px solid #4b5f7a; border-radius: 10px;
+           padding: 10px 12px; font-size: 12px; font-family: ui-sans-serif, system-ui; box-shadow: 0 4px 14px rgba(0,0,0,.45); }
+  #cloudpanel h4 { font-size: 12px; color: #c4b5fd; margin-bottom: 6px; letter-spacing: .3px; }
+  #cloudpanel label { display: flex; align-items: center; gap: 8px; margin: 5px 0; }
+  #cloudpanel label span { width: 58px; color: #9fb2c9; }
+  #cloudpanel input[type=range] { flex: 1; }
+  #cloudpanel .v { width: 34px; text-align: right; color: #eaf2ff; font-variant-numeric: tabular-nums; }
+  #arr { position: fixed; right: 12px; top: 84px; z-index: 500; width: 168px; max-height: 66vh; overflow-y: auto;
+         background: rgba(20,28,40,.86); color: #dde6f2; border: 1px solid #3a4a60; border-radius: 8px;
+         padding: 8px 10px; font-size: 11px; font-family: ui-sans-serif, system-ui; box-shadow: 0 4px 14px rgba(0,0,0,.35); }
+  #arr .ah { font-weight: 700; color: #cfe0f5; margin-bottom: 6px; letter-spacing: .3px; }
+  #arr .arow { display: flex; align-items: center; gap: 6px; margin: 2px 0; font-variant-numeric: tabular-nums; }
+  #arr .al { width: 24px; color: #9fb2c9; text-align: right; }
+  #arr .abar { flex: 1; height: 7px; background: rgba(255,255,255,.08); border-radius: 4px; overflow: hidden; }
+  #arr .abar span { display: block; height: 100%; background: linear-gradient(90deg,#1a73e8,#4aa3ff); border-radius: 4px; }
+  #arr .ap { width: 30px; text-align: right; color: #eaf2ff; }
+  @media (max-width: 620px){ #arr { display: none; } }
+  #title b { font-weight: 700; letter-spacing: 2px; font-family: "Fraunces", Georgia, serif; }
+  #toast { position: fixed; left: 50%; top: 64px; transform: translateX(-50%) translateY(-8px); z-index: 620;
+           opacity: 0; transition: opacity .3s, transform .3s; pointer-events: none; white-space: nowrap;
+           font-family: "Fraunces", Georgia, serif; font-weight: 700; font-size: 17px; color: #3a2c10;
+           background: linear-gradient(180deg,#ffe8ac,#ffcf5c); padding: 9px 20px; border-radius: 999px;
+           box-shadow: 0 6px 20px rgba(120,80,10,.4), inset 0 1px 0 rgba(255,255,255,.6); border: 1px solid #e0a92e; }
+  #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+  @keyframes strkpop { 0%{ transform: scale(1);} 40%{ transform: scale(1.5);} 100%{ transform: scale(1);} }
+  .strk.pop b { display: inline-block; animation: strkpop .45s ease; }
+  #topright { position: fixed; right: 12px; top: 12px; z-index: 560; display: flex; gap: 6px; }
+  .chip { width: 34px; height: 34px; border-radius: 9px; border: 1px solid #cdd6e0; background: rgba(255,255,255,.94);
+          color: #1a73e8; font-size: 15px; font-weight: 700; cursor: pointer; box-shadow: 0 2px 8px rgba(20,28,40,.25);
+          display: flex; align-items: center; justify-content: center; }
+  .chip:hover { border-color: #1a73e8; }
+  #timer { position: fixed; left: 50%; top: 12px; transform: translateX(-50%); z-index: 560; display: none;
+           font-variant-numeric: tabular-nums; font-weight: 800; font-size: 20px; color: #fff; letter-spacing: 1px;
+           background: rgba(197,34,31,.92); padding: 6px 16px; border-radius: 999px; box-shadow: 0 3px 12px rgba(0,0,0,.35); }
+  #timer.warn { background: rgba(180,20,20,.96); animation: pulse .8s infinite; }
+  @keyframes pulse { 0%,100%{ transform: translateX(-50%) scale(1); } 50%{ transform: translateX(-50%) scale(1.08); } }
+  .strk { color: #ffcf5c !important; } .strk b { color: #ffe08a; }
+  #overlay { position: fixed; inset: 0; z-index: 800; display: none; align-items: center; justify-content: center;
+             background: rgba(12,18,28,.62); backdrop-filter: blur(3px); padding: 16px; }
+  #modal { background: #fff; color: #1f2a37; border-radius: 16px; max-width: 460px; width: 100%; padding: 24px;
+           box-shadow: 0 18px 50px rgba(0,0,0,.4); max-height: 88vh; overflow-y: auto; }
+  #modal h2 { font-size: 24px; margin-bottom: 14px; color: #12325f; font-family: "Fraunces", Georgia, serif; }
+  #modal p, #modal li { font-size: 14.5px; line-height: 1.5; margin-bottom: 10px; color: #33414f; }
+  #modal .big { text-align: center; font-size: 15px; }
+  #modal button.primary { width: 100%; margin-top: 10px; background: #1a73e8; color: #fff; border: none;
+           border-radius: 10px; padding: 13px; font-size: 16px; font-weight: 700; cursor: pointer; }
+  #modal button.primary:hover { background: #1560c9; }
+  #modal button.ghost { width: 100%; margin-top: 8px; background: #fff; color: #46566b; border: 1px solid #cdd6e0;
+           border-radius: 10px; padding: 11px; font-size: 14px; font-weight: 600; cursor: pointer; }
+  #modal .share { font-family: ui-monospace, monospace; white-space: pre; background: #f4f6f9; border: 1px solid #dde3ea;
+           border-radius: 10px; padding: 12px; font-size: 13px; margin: 8px 0; text-align: center; line-height: 1.35; }
+  #modal .stats-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 12px 0; }
+  #modal .sg { background: #f4f6f9; border-radius: 10px; padding: 10px 12px; }
+  #modal .sg b { font-size: 24px; color: #12325f; display: block; font-family: "Fraunces", Georgia, serif; }
+  #modal .sg span { font-size: 12px; color: #6a7684; }
+  #modal input, #modal textarea { width: 100%; border: 1px solid #cdd6e0; border-radius: 10px; padding: 10px;
+           font-size: 14px; font-family: inherit; margin-bottom: 8px; }
+  #modal textarea { min-height: 90px; resize: vertical; }
   #loading { position: fixed; inset: 0; z-index: 700; display: flex; align-items: center; justify-content: center;
              color: #46566b; font-size: 16px; background: #e9edf2; }
+  /* mobile: tighten HUD, shrink chips, keep everything clear of the map controls & notch */
+  @media (max-width: 620px){
+    #stats { gap: 10px 12px; font-size: 11.5px; }
+    #stats b { font-size: 13px; }
+    #title { font-size: 11px; padding: 4px 8px; top: calc(8px + env(safe-area-inset-top)); }
+    #topright { top: calc(8px + env(safe-area-inset-top)); right: 8px; gap: 4px; }
+    .chip { width: 30px; height: 30px; font-size: 14px; }
+    #guess { font-size: 16px; padding: 11px 12px; }   /* 16px avoids iOS zoom-on-focus */
+    #recenter, #reset { padding: 0 11px; font-size: 16px; }
+    #toast { font-size: 15px; top: calc(52px + env(safe-area-inset-top)); }
+    #timer { top: calc(48px + env(safe-area-inset-top)); font-size: 17px; }
+    #modal { padding: 18px; border-radius: 14px; }
+    #modal h2 { font-size: 20px; }
+  }
 </style>
 </head>
 <body>
 <div id="map"></div>
 <canvas id="fog"></canvas>
+<div id="grain"></div>
+<div id="vignette"></div>
 <svg width="0" height="0" style="position:absolute"><defs>
   <filter id="fogEdge" x="-50%" y="-50%" width="200%" height="200%" color-interpolation-filters="sRGB">
     <feTurbulence type="fractalNoise" baseFrequency="0.022" numOctaves="3" seed="11" result="noise"/>
@@ -59,8 +143,17 @@
     <feGaussianBlur id="fblur" in="disp" stdDeviation="1"/>
   </filter>
 </defs></svg>
-<div id="title"><b>PARIS</b> · rue par rue</div>
+<div id="title"><b>PARIS</b> · <span id="subtitle">rue par rue</span></div>
+<div id="topright">
+  <button id="langBtn" class="chip" title="Language">FR</button>
+  <button id="rulesBtn" class="chip" title="How to play">?</button>
+  <button id="dailyBtn" class="chip" title="Daily challenge">◷</button>
+  <button id="fbBtn" class="chip" title="Feedback">✎</button>
+</div>
+<div id="timer"></div>
 <div id="debug"></div>
+<div id="cloudpanel"></div>
+<div id="arr"></div>
 <div id="msg"></div>
 <div id="hud">
   <div id="stats"></div>
@@ -71,12 +164,99 @@
     <button id="reset" title="Reset progress">↺</button>
   </div>
 </div>
+<!-- modal overlay (rules / daily / result / feedback) -->
+<div id="overlay"><div id="modal"></div></div>
+<div id="toast"></div>
+<canvas id="fx"></canvas>
 <div id="loading">Loading map of Paris…</div>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="paris.js"></script>
 <script>
 const D = window.PARIS, NODES = D.nodes, EDGES = D.edges;
 const TOTAL_KM = EDGES.reduce((s,e)=>s+e.k, 0);
+
+// major Paris landmarks: an emoji appears once you've explored streets nearby (reward for arriving)
+const MONUMENTS = [
+  {n:"Tour Eiffel", e:"🗼", lat:48.8584, lon:2.2945},
+  {n:"Arc de Triomphe", e:"🏛️", lat:48.8738, lon:2.2950},
+  {n:"Notre-Dame", e:"⛪", lat:48.8530, lon:2.3499},
+  {n:"Sacré-Cœur", e:"⛪", lat:48.8867, lon:2.3431},
+  {n:"Louvre", e:"🖼️", lat:48.8606, lon:2.3376},
+  {n:"Panthéon", e:"🏛️", lat:48.8462, lon:2.3464},
+  {n:"Opéra Garnier", e:"🎭", lat:48.8719, lon:2.3316},
+  {n:"Tour Montparnasse", e:"🏢", lat:48.8422, lon:2.3220},
+  {n:"Les Invalides", e:"⛪", lat:48.8566, lon:2.3126},
+  {n:"Place de la Concorde", e:"🗿", lat:48.8656, lon:2.3212},
+  {n:"Bastille", e:"🕊️", lat:48.8532, lon:2.3692},
+  {n:"Gare du Nord", e:"🚉", lat:48.8809, lon:2.3553},
+  {n:"Père-Lachaise", e:"🌳", lat:48.8610, lon:2.3934},
+  {n:"Bois de Boulogne", e:"🌳", lat:48.8620, lon:2.2490},
+  {n:"Jardin du Luxembourg", e:"🌳", lat:48.8462, lon:2.3372},
+];
+
+// ---- i18n (french / english) ----------------------------------------------
+const I18N = {
+  en: {
+    subtitle: "street by street", debugMode: "debug mode (D)",
+    placeholder: "Name a street touching a glowing junction…",
+    recenter: "Recenter on discoveries", reset: "Reset progress",
+    lang: "Français", rules: "How to play", feedback: "Feedback",
+    streets: "streets", km: "km", area: "km²", reachable: "reachable now",
+    streak: "streak", byArr: "By arrondissement",
+    ok: n=>"✓ "+n,
+    notAdjacent: "So close — that street isn't touching your explored area yet",
+    oneOff: `Almost — check your spelling and try again`,
+    noMatch: "Hmm — no street here by that name",
+    alreadyThere: "Already explored ✓",
+    noPair: "No single street joins just those two junctions",
+    blockDone: "Block cleared! ▪",
+    rulesTitle: "Paris, street by street",
+    rulesBody: [
+      "🗺️ The city is under fog. Reveal it street by street from memory.",
+      "✏️ Type the name of any street touching a <b>glowing junction</b>, then Enter. Prefixes (rue, boulevard…) and accents are optional; one typo is forgiven.",
+      "🔗 Click two junctions to reveal the street connecting exactly those two.",
+      "▪️ Enclose a block on all sides and its interior clears automatically.",
+      "↑ recalls your last guess · drag/scroll to move · ⌖ recenters · D toggles debug.",
+    ],
+    rulesStart: "Start exploring",
+    dailyTitle: "Daily · 5 minutes", dailyStart: "Start daily run",
+    dailyOver: "Time!", playFree: "Free play", share: "Copy result",
+    copied: "Copied to clipboard!", daily: "Daily", timeLeft: "left",
+    result: n=>`Paris daily — ${n}`,
+  },
+  fr: {
+    subtitle: "rue par rue", debugMode: "mode debug (D)",
+    placeholder: "Nommez une rue touchant un carrefour lumineux…",
+    recenter: "Recentrer sur les découvertes", reset: "Réinitialiser",
+    lang: "English", rules: "Règles du jeu", feedback: "Votre avis",
+    streets: "rues", km: "km", area: "km²", reachable: "accessibles",
+    streak: "série", byArr: "Par arrondissement",
+    ok: n=>"✓ "+n,
+    notAdjacent: "Presque — cette rue ne touche pas encore votre zone explorée",
+    oneOff: `Tout près — vérifiez l'orthographe et réessayez`,
+    noMatch: "Hmm — aucune rue de ce nom ici",
+    alreadyThere: "Déjà exploré ✓",
+    noPair: "Aucune rue unique ne relie exactement ces deux carrefours",
+    blockDone: "Îlot dévoilé ! ▪",
+    rulesTitle: "Paris, rue par rue",
+    rulesBody: [
+      "🗺️ La ville est sous le brouillard. Dévoilez-la rue par rue, de mémoire.",
+      "✏️ Tapez le nom d'une rue touchant un <b>carrefour lumineux</b>, puis Entrée. Les préfixes (rue, boulevard…) et accents sont optionnels ; une faute est tolérée.",
+      "🔗 Cliquez deux carrefours pour révéler la rue reliant exactement ces deux-là.",
+      "▪️ Encerclez un îlot de tous côtés et son intérieur se dévoile automatiquement.",
+      "↑ rappelle votre dernière saisie · glisser/molette pour bouger · ⌖ recentre · D pour le debug.",
+    ],
+    rulesStart: "Commencer",
+    dailyTitle: "Défi du jour · 5 minutes", dailyStart: "Lancer le défi",
+    dailyOver: "Temps écoulé !", playFree: "Jeu libre", share: "Copier le résultat",
+    copied: "Copié dans le presse-papier !", daily: "Défi", timeLeft: "restant",
+    result: n=>`Paris défi du jour — ${n}`,
+  },
+};
+let LANG = localStorage.getItem("paris-lang") || (navigator.language||"en").slice(0,2);
+if (!I18N[LANG]) LANG = "en";
+const t = k => I18N[LANG][k];
+function setLang(l){ LANG=l; localStorage.setItem("paris-lang", l); applyLang(); }
 
 // ---- fuzzy matching -------------------------------------------------------
 const STRIP = new Set(("rue ruelle avenue place placette passage villa allee impasse boulevard bd square route "+
@@ -100,42 +280,116 @@ const CORE = EDGES.map(e=>core(e.n));
 
 // ---- game state -----------------------------------------------------------
 const FACES = D.faces || [];
+const PLAZAS = D.plazas || [];
 const nodeEdges = NODES.map(()=>[]);            // node index -> edge indices touching it
 EDGES.forEach((e,ei)=> e.i.forEach(ni=> nodeEdges[ni].push(ei)));
 const edgeFaces = EDGES.map(()=>[]);            // edge index -> face indices it bounds
 FACES.forEach((f,fi)=> f.e.forEach(ei=> edgeFaces[ei].push(fi)));
+const edgePlazas = EDGES.map(()=>[]);           // edge index -> plaza indices it reveals
+PLAZAS.forEach((p,pi)=> p.e.forEach(ei=> edgePlazas[ei].push(pi)));
 const pairEdge = new Map();                      // "nodeA,nodeB" -> edge index (street joining exactly those two)
 EDGES.forEach((e,ei)=>{ if(e.i.length===2) pairEdge.set(e.i[0]+","+e.i[1], ei); });
 const revEdge = new Uint8Array(EDGES.length);   // revealed edges
 const revNode = new Uint8Array(NODES.length);   // revealed junctions
 const revFace = new Uint8Array(FACES.length);   // fully-enclosed blocks revealed
+const revPlaza = new Uint8Array(PLAZAS.length); // revealed plaza polygons
 const revList = [];                             // revealed edge indices, reveal order
 const faceList = [];                            // revealed face indices, for drawing
-let revEdgeCount = 0, revKm = 0, flashEdge = -1, flashT = 0;
+const plazaList = [];                           // revealed plaza indices, for drawing
+const frontier = new Set();                     // revealed nodes that still have an unrevealed edge (drawn/clickable)
+let revEdgeCount = 0, revKm = 0, revArea = 0, flashEdge = -1, flashT = 0;
+let streak = 0, bestStreak = 0;                 // consecutive correct guesses
+const anim = [];                                // active reveal draw-on / fill animations
+
+// ---- totals + progress, overall and per arrondissement --------------------
+const ARR = D.arr || [];
+const TOTAL_AREA = FACES.reduce((s,f)=>s+(f.m||0), 0);     // m²
+// per-arr denominators; index ARR.length is the "unassigned / outside" bucket
+const NB = ARR.length;
+const arrTotKm = new Float64Array(NB+1), arrTotArea = new Float64Array(NB+1);
+const arrTotN = new Int32Array(NB+1), arrCntN = new Int32Array(NB+1);
+const arrKm = new Float64Array(NB+1), arrArea = new Float64Array(NB+1);
+const ai = e => (e.a>=0 && e.a<NB) ? e.a : NB;
+EDGES.forEach(e=>{ const k=ai(e); arrTotKm[k]+=e.k; arrTotN[k]++; });
+FACES.forEach(f=>{ const k=(f.a>=0&&f.a<NB)?f.a:NB; arrTotArea[k]+=f.m||0; });
 
 const SAVE_KEY = "paris-streets-progress";
+let daily = false;                               // daily-mode flag (no persistence)
 function save(){
+  if (daily) return;
   try { localStorage.setItem(SAVE_KEY, JSON.stringify(revList)); } catch(e){}
 }
-function checkFaces(ei){                         // reveal any block whose every bounding edge is now revealed
+
+// ---- sound: WebAudio blips, pitch/volume scaled to what was revealed --------
+let AC = null;
+function sound(km, area, big){
+  try {
+    AC = AC || new (window.AudioContext||window.webkitAudioContext)();
+    const now = AC.currentTime;
+    // longer street -> lower, fuller note; block/plaza fill -> a bright chord
+    const base = 300 + 340/Math.max(0.06, km+0.3);
+    // combo cadence: a hot streak nudges the pitch up a semitone per step (caps at an octave)
+    const combo = Math.pow(2, Math.min(12, Math.max(0, streak-1))/12);
+    const notes = big ? [base, base*1.26, base*1.5] : [Math.min(1400, base*combo)];
+    const vol = Math.min(0.32, 0.09 + km*0.06 + (area/60000)*0.12) * (big?1.3:1);
+    notes.forEach((f,i)=>{
+      const o = AC.createOscillator(), g = AC.createGain();
+      o.type = big ? "triangle" : "sine"; o.frequency.value = f;
+      const st = now + i*0.05;
+      g.gain.setValueAtTime(0, st);
+      g.gain.linearRampToValueAtTime(vol, st+0.012);
+      g.gain.exponentialRampToValueAtTime(0.0008, st + (big?0.5:0.22));
+      o.connect(g).connect(AC.destination); o.start(st); o.stop(st + (big?0.55:0.26));
+    });
+  } catch(e){}
+}
+
+function checkFaces(ei, replay){                  // reveal any block/plaza whose trigger is now revealed
+  let filled = 0;
   for (const fi of edgeFaces[ei]){
     if (revFace[fi]) continue;
-    if (FACES[fi].e.every(e => revEdge[e])){ revFace[fi] = 1; faceList.push(fi); }
+    if (FACES[fi].e.every(e => revEdge[e])){
+      revFace[fi] = 1; faceList.push(fi); filled++;
+      const m = FACES[fi].m||0; revArea += m;
+      const k=(FACES[fi].a>=0&&FACES[fi].a<NB)?FACES[fi].a:NB; arrArea[k]+=m;
+      if (!replay) anim.push({type:"face", fi, t:0});
+    }
   }
+  for (const pi of edgePlazas[ei]){              // a plaza clears once any same-named street is revealed
+    if (revPlaza[pi]) continue;
+    revPlaza[pi] = 1; plazaList.push(pi); if (!replay) anim.push({type:"plaza", pi, t:0});
+  }
+  return filled;
 }
 function reveal(ei, replay){
   if (revEdge[ei]) return false;
   revEdge[ei] = 1; revList.push(ei); revEdgeCount++; revKm += EDGES[ei].k;
+  const k = ai(EDGES[ei]); arrKm[k]+=EDGES[ei].k; arrCntN[k]++;
   EDGES[ei].i.forEach(ni => revNode[ni] = 1);
-  checkFaces(ei);
-  if (!replay){ flashEdge = ei; flashT = 1; save(); }
+  // update frontier: this edge's endpoints may now be revealed; any node that just
+  // lost its last unrevealed edge drops out. Only touch nodes adjacent to this edge.
+  for (const ni of EDGES[ei].i){
+    let open = false;
+    for (const e2 of nodeEdges[ni]) if (!revEdge[e2]){ open = true; break; }
+    if (open) frontier.add(ni); else frontier.delete(ni);
+  }
+  const filled = checkFaces(ei, replay);
+  fogDirty = true;                                 // geometry changed -> rebuild cached fog
+  if (!replay){
+    flashEdge = ei; flashT = 1; save();
+    anim.push({type:"edge", ei, t:0});           // draw-on animation
+    sound(EDGES[ei].k, filled ? 40000 : 0, filled>0);
+    if (!animRunning) { animRunning = true; requestAnimationFrame(animLoop); }
+  }
   return true;
 }
 
 // ---- map + overlay --------------------------------------------------------
-let map, W, H, DPR, follow = true, selNode = -1, debug = false, hoverFace = -1;
+let map, W, H, DPR, follow = true, selNode = -1, debug = false, hoverFace = -1, dragging = false;
 let hoverEdge = -1, hoverXY = null;              // revealed street under cursor + cursor pos, for name tooltip
 const cv = document.getElementById("fog"), ctx = cv.getContext("2d");
+const fogLayer = document.createElement("canvas"), fctx = fogLayer.getContext("2d");  // cached fog+streets
+let fogDirty = true;                             // rebuild the cached fog layer on next draw
 const fdisp = document.getElementById("fdisp"), fblur = document.getElementById("fblur");
 function proj(lat, lon){ return map.latLngToContainerPoint([lat, lon]); }
 
@@ -174,7 +428,23 @@ function precompute(){
     }
     fb[fi]=[mnx,mny,mxx,mxy]; return a;
   });
-  PX = { e, eb, n, f, fb };
+  const pb = [];
+  const pl = PLAZAS.map((pz, pi)=>{
+    let mnx=1e18,mny=1e18,mxx=-1e18,mxy=-1e18;
+    const a = new Float64Array(pz.p.length*2);
+    for (let k=0;k<pz.p.length;k++){
+      const q = map.project([pz.p[k][0], pz.p[k][1]], REFZ);
+      a[2*k]=q.x; a[2*k+1]=q.y;
+      if(q.x<mnx)mnx=q.x; if(q.x>mxx)mxx=q.x; if(q.y<mny)mny=q.y; if(q.y>mxy)mxy=q.y;
+    }
+    pb[pi]=[mnx,mny,mxx,mxy]; return a;
+  });
+  PX = { e, eb, n, f, fb, pl, pb };
+  // monuments: world-pixel position + the nearest street (icon appears once that street is revealed)
+  for (const mn of MONUMENTS){
+    const q = map.project([mn.lat, mn.lon], REFZ); mn._x = q.x; mn._y = q.y;
+    mn._edge = nearestEdge(mn.lat, mn.lon);
+  }
 }
 function updateXform(){                            // recompute affine + visible bbox for the current view (2 Leaflet calls)
   const z = map.getZoom();
@@ -236,28 +506,43 @@ function faceAt(px, py){
   return best;
 }
 
-// seamless procedural cloud (SVG fractal noise -> opaque grey billows, baked once per size)
-let cloudCanvas, cloudReady = false;
+// procedural cloud mist (SVG feTurbulence), baked to a canvas larger than the viewport and
+// ANCHORED to a world position so it pans/zooms with the ground. The warm vertical gradient is
+// drawn separately each frame in renderFog (sky-like, stays screen-fixed). Params in cloudCfg.
+let cloudTex = null, cloudReady = false, fogSeed = 7;
+let cloudBakeS = 1, cloudWX = 0, cloudWY = 0;      // scale + world top-left at bake time (for anchoring)
+const cloudCfg = {
+  freq: 0.025,      // turbulence base frequency (lower = larger, softer billows)
+  octaves: 5,       // fractal detail
+  opacity: 1.0,     // strength of the mist over the warm base
+  tint: 246,        // grey level of the mist (0..255; higher = whiter/brighter)
+};
 function makeCloud(){
-  cloudReady = false;
-  const w = Math.ceil(W), h = Math.ceil(H);
+  if (!map) return;
+  updateXform();                                   // current affine, so we can record the anchor
+  const M = Math.round(0.35 * Math.max(W, H));     // margin: cloud extends past the viewport so pans stay covered
+  const w = Math.ceil(W) + 2*M, h = Math.ceil(H) + 2*M;
+  cloudBakeS = S;                                  // remember zoom scale this was baked at
+  cloudWX = (-M - Tx) / S;                         // world coord (at REFZ) of the cloud's top-left pixel
+  cloudWY = (-M - Ty) / S;
+  const C = cloudCfg, tt = (C.tint/255).toFixed(3);
+  // feColorMatrix maps the noise to a light-grey mist whose alpha comes from the noise itself.
   const svg =
     "<svg xmlns='http://www.w3.org/2000/svg' width='"+w+"' height='"+h+"'>"+
       "<filter id='c' x='0' y='0' width='100%' height='100%'>"+
-        "<feTurbulence type='fractalNoise' baseFrequency='0.011 0.014' numOctaves='5' seed='7'/>"+
-        "<feColorMatrix type='matrix' values='"+
-          "0.18 0 0 0 0.74  0.18 0 0 0 0.77  0.22 0 0 0 0.82  0 0 0 0 1'/>"+   // opaque light-grey band
+        "<feTurbulence type='fractalNoise' baseFrequency='"+C.freq.toFixed(4)+"' numOctaves='"+C.octaves+"' seed='"+fogSeed+"'/>"+
+        "<feColorMatrix type='matrix' values='0 0 0 0 "+tt+"  0 0 0 0 "+tt+"  0 0 0 0 "+(Math.min(1,C.tint/255+0.02)).toFixed(3)+"  0 0 0 "+C.opacity.toFixed(3)+" 0'/>"+
       "</filter>"+
       "<rect width='100%' height='100%' filter='url(#c)'/>"+
     "</svg>";
   const img = new Image();
   img.onload = ()=>{
-    cloudCanvas = document.createElement("canvas");
-    cloudCanvas.width = w; cloudCanvas.height = h;
-    cloudCanvas.getContext("2d").drawImage(img, 0, 0);
-    cloudReady = true; draw();
+    const c = document.createElement("canvas"); c.width = w; c.height = h;
+    c.getContext("2d").drawImage(img, 0, 0);
+    cloudTex = c; cloudReady = true; fogDirty = true; draw();
   };
   img.src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg);
+  fogDirty = true; draw();                          // gradient base shows immediately
 }
 
 function resize(){
@@ -265,6 +550,9 @@ function resize(){
   W = map.getSize().x; H = map.getSize().y;
   cv.width = W*DPR; cv.height = H*DPR; cv.style.width = W+"px"; cv.style.height = H+"px";
   ctx.setTransform(DPR,0,0,DPR,0,0);
+  fogLayer.width = W*DPR; fogLayer.height = H*DPR;
+  fctx.setTransform(DPR,0,0,DPR,0,0);
+  fogDirty = true;
   makeCloud();
 }
 
@@ -276,9 +564,36 @@ function revealedBounds(){
     }
   return any ? L.latLngBounds([a,c],[b,d]) : null;
 }
+// smooth camera tween: interpolate center+zoom over `ms`, instant setView per frame
+// (zoomAnimation is off, so each setView is instant and the canvas stays glued -> smooth).
+let camRAF = 0, camStartT = 0;
+function tweenTo(targetCenter, targetZoom, ms){
+  if (dragging) return;
+  cancelAnimationFrame(camRAF);
+  const c0 = map.getCenter(), z0 = map.getZoom();
+  const c1 = targetCenter, z1 = Math.max(map.getMinZoom(), Math.min(map.getMaxZoom(), targetZoom));
+  if (Math.abs(z1-z0) < 0.01 && map.distance(c0,c1) < 5){ return; }  // nothing to do
+  const dur = ms || 550; let start = null;
+  dragging = true;                                                    // fast fog while flying
+  const ease = t => 1-(1-t)*(1-t);
+  function frame(ts){
+    if (start===null) start = ts;
+    const t = Math.min(1, (ts-start)/dur), e = ease(t);
+    const lat = c0.lat + (c1.lat-c0.lat)*e, lng = c0.lng + (c1.lng-c0.lng)*e;
+    map.setView([lat,lng], z0 + (z1-z0)*e, { animate:false });
+    if (t<1) camRAF = requestAnimationFrame(frame);
+    else { dragging = false; makeCloud(); }        // re-bake cloud at the settled view
+  }
+  camRAF = requestAnimationFrame(frame);
+}
+// Leaflet's fractional-zoom helper: what zoom fits these bounds in the current viewport
+function zoomForBounds(bb, padPx, maxZ){
+  const z = map.getBoundsZoom(bb, false, L.point(padPx,padPx));
+  return Math.min(z, maxZ==null?19:maxZ);
+}
 function fitRevealed(){
   const bb = revealedBounds(); if(!bb) return;
-  map.fitBounds(bb, { padding:[70,120], maxZoom:16, animate:true });
+  tweenTo(bb.getCenter(), zoomForBounds(bb, 80, 16), 650);
 }
 function edgeBounds(ei){
   let a=90,b=-90,c=180,d=-180;
@@ -290,60 +605,132 @@ function edgeBounds(ei){
 function growViewToEdge(ei){                       // keep the current view, expand it just enough to include the new street
   const nb = edgeBounds(ei);
   if (map.getBounds().contains(nb)) return;        // already visible -> leave the view untouched
-  map.fitBounds(map.getBounds().extend(nb), { padding:[70,120], maxZoom:map.getZoom(), animate:true });
+  const merged = map.getBounds().extend(nb);
+  tweenTo(merged.getCenter(), zoomForBounds(merged, 80, map.getZoom()), 500);
 }
 
 // ---- render fog + reveal overlay -----------------------------------------
-function strokePaths(ei){                          // add this edge's polylines to the current path (fast xform)
+function strokePathsG(g, ei){                      // add this edge's polylines to context g's path
   for (const a of PX.e[ei]){
-    ctx.moveTo(a[0]*S+Tx, a[1]*S+Ty);
-    for (let k=1;k<a.length/2;k++) ctx.lineTo(a[2*k]*S+Tx, a[2*k+1]*S+Ty);
+    g.moveTo(a[0]*S+Tx, a[1]*S+Ty);
+    for (let k=1;k<a.length/2;k++) g.lineTo(a[2*k]*S+Tx, a[2*k+1]*S+Ty);
   }
 }
-function tracePoly(a){                              // add a face polygon (Float64Array) to the current path
-  ctx.moveTo(a[0]*S+Tx, a[1]*S+Ty);
-  for (let k=1;k<a.length/2;k++) ctx.lineTo(a[2*k]*S+Tx, a[2*k+1]*S+Ty);
-  ctx.closePath();
+function tracePolyG(g, a){                          // add a face polygon to context g's path
+  g.moveTo(a[0]*S+Tx, a[1]*S+Ty);
+  for (let k=1;k<a.length/2;k++) g.lineTo(a[2*k]*S+Tx, a[2*k+1]*S+Ty);
+  g.closePath();
+}
+function strokePaths(ei){ strokePathsG(ctx, ei); } // overlays draw on the main context
+function tracePoly(a){ tracePolyG(ctx, a); }
+// Build the cached fog layer (cloud + turbulence-punched holes + revealed-street tint).
+// Expensive (SVG filter), so we only redo it when the view or geometry changes — NOT on
+// hover / animation frames, which just re-blit this cached layer.
+function renderFog(){
+  const z = map.getZoom();
+  const mPerPx = 156543.03392 * Math.cos(map.getCenter().lat*Math.PI/180) / Math.pow(2, z);
+  const brush = 18 / mPerPx;
+  const g = fctx;
+  g.setTransform(DPR,0,0,DPR,0,0); g.clearRect(0,0,W,H);
+  g.lineCap = "round"; g.lineJoin = "round";
+
+  // 1. fog veil: warm sky gradient (screen-fixed) + mist texture anchored to the ground.
+  const grad = g.createLinearGradient(0, 0, 0, H);
+  grad.addColorStop(0, "#efe7d6");     // warm cream at top
+  grad.addColorStop(1, "#d7dce4");     // cool grey at bottom
+  g.fillStyle = grad; g.fillRect(0, 0, W, H);
+  if (cloudTex){
+    // place the baked texture at its world anchor, scaled for the current zoom -> pans/zooms with the map
+    const rel = S / cloudBakeS;                     // how much the view zoomed since bake
+    const dx = cloudWX * S + Tx, dy = cloudWY * S + Ty;
+    g.drawImage(cloudTex, dx, dy, cloudTex.width*rel, cloudTex.height*rel);
+  }
+
+  // 2. GILDED COASTLINE: a warm glow along the reveal outline, feathered with the same
+  //    turbulence filter as the punch so its outer edge is soft & irregular (not a hard ring).
+  g.save();
+  g.filter = dragging ? `blur(${(brush*0.6).toFixed(1)}px)` : "url(#fogEdge)";
+  g.strokeStyle = "rgba(214,168,74,0.4)"; g.lineWidth = brush + 6;
+  g.beginPath();
+  for (const ei of revList) if (onScreen(PX.eb[ei])) strokePathsG(g, ei);
+  for (const fi of faceList) if (onScreen(PX.fb[fi])) tracePolyG(g, PX.f[fi]);
+  for (const pi of plazaList) if (onScreen(PX.pb[pi])) tracePolyG(g, PX.pl[pi]);
+  g.stroke();
+  g.filter = "none";
+  g.restore();
+
+  // 3. punch holes along revealed streets + filled blocks/plazas (turbulence when idle, cheap blur while moving)
+  fdisp.setAttribute("scale", Math.max(8, brush*1.1).toFixed(0));
+  fblur.setAttribute("stdDeviation", (brush*0.35).toFixed(1));
+  g.globalCompositeOperation = "destination-out";
+  g.filter = dragging ? `blur(${(brush*0.5).toFixed(1)}px)` : "url(#fogEdge)";
+  g.beginPath();
+  for (const fi of faceList) if (onScreen(PX.fb[fi])) tracePolyG(g, PX.f[fi]);
+  for (const pi of plazaList) if (onScreen(PX.pb[pi])) tracePolyG(g, PX.pl[pi]);
+  g.fill();
+  g.strokeStyle = "rgba(0,0,0,1)"; g.lineWidth = brush;
+  g.beginPath();
+  for (const ei of revList) if (onScreen(PX.eb[ei])) strokePathsG(g, ei);
+  g.stroke();
+  g.filter = "none";
+  g.globalCompositeOperation = "source-over";
+
+  // 4. cleared blocks get a faint warm tint + hatch so conquered land reads at a glance
+  g.save();
+  for (const fi of faceList){
+    if (!onScreen(PX.fb[fi])) continue;
+    g.beginPath(); tracePolyG(g, PX.f[fi]);
+    g.fillStyle = "rgba(214,168,74,0.07)"; g.fill();
+  }
+  g.restore();
+
+  // 5. revealed streets as ink, width varying by class (longer roads = thicker, like boulevards)
+  for (const ei of revList){
+    if (!onScreen(PX.eb[ei])) continue;
+    const w = Math.max(1.4, (z-11)*0.7) * (0.8 + Math.min(1.1, EDGES[ei].k*0.6));
+    g.strokeStyle = "rgba(40,54,74,0.72)"; g.lineWidth = w;
+    g.beginPath(); strokePathsG(g, ei); g.stroke();
+  }
+  fogDirty = false;
 }
 function draw(){
   if (!map || !PX) return;
   const z = map.getZoom();
   updateXform();                                   // one-time affine + visible bbox for this frame
-  ctx.setTransform(DPR,0,0,DPR,0,0); ctx.clearRect(0,0,W,H);
+  if (fogDirty) renderFog();
+  ctx.setTransform(1,0,0,1,0,0); ctx.clearRect(0,0,cv.width,cv.height);
+  ctx.drawImage(fogLayer, 0, 0);                   // blit cached fog+streets (cheap)
+  ctx.setTransform(DPR,0,0,DPR,0,0);
   ctx.lineCap = "round"; ctx.lineJoin = "round";
-  // reveal corridor: fixed real-world half-width (metres) -> px, so the same
-  // ground area clears at any zoom. Narrow, so it hugs the revealed street.
-  const mPerPx = 156543.03392 * Math.cos(map.getCenter().lat*Math.PI/180) / Math.pow(2, z);
-  const brush = 18 / mPerPx;
 
-  // 1. fog veil over the whole viewport: seamless procedural cloud (fallback to flat grey)
-  if (cloudReady){ ctx.drawImage(cloudCanvas, 0, 0, W, H); }
-  else { ctx.fillStyle = "rgba(224,230,237,0.985)"; ctx.fillRect(0,0,W,H); }
-
-  // 2. punch a hole along revealed streets; an SVG turbulence filter warps the edge into irregular mist
-  fdisp.setAttribute("scale", Math.max(8, brush*1.1).toFixed(0));
-  fblur.setAttribute("stdDeviation", (brush*0.35).toFixed(1));
-  ctx.globalCompositeOperation = "destination-out";
-  ctx.filter = "url(#fogEdge)";
-  ctx.beginPath();
-  for (const fi of faceList) if (onScreen(PX.fb[fi])) tracePoly(PX.f[fi]);   // enclosed blocks
-  ctx.fill();
-  ctx.strokeStyle = "rgba(0,0,0,1)"; ctx.lineWidth = brush;
-  ctx.beginPath();
-  for (const ei of revList) if (onScreen(PX.eb[ei])) strokePaths(ei);        // narrow street corridors
-  ctx.stroke();
-  ctx.filter = "none";
-  ctx.globalCompositeOperation = "source-over";
-
-  // 3. highlight revealed streets so your progress reads over the map
-  ctx.strokeStyle = "rgba(26,115,232,0.5)"; ctx.lineWidth = Math.max(2, (z-11)*0.9);
-  ctx.beginPath();
-  for (const ei of revList) if (onScreen(PX.eb[ei])) strokePaths(ei);
-  ctx.stroke();
-
-  // 4. flash the newest reveal
+  // 4. reveal animations: streets draw-on in gold, blocks/plazas pop with a shimmer
+  for (const A of anim){
+    if (A.type === "edge"){
+      const e = A.ei; const g = 1 - (1-A.t)*(1-A.t);       // ease-out
+      ctx.strokeStyle = `rgba(255,201,92,${0.9*(1-A.t)+0.1})`;
+      ctx.lineWidth = Math.max(3,(z-11)*1.5)*(1.4-0.4*A.t);
+      ctx.save(); ctx.beginPath();
+      for (const a of PX.e[e]){                              // draw a growing fraction of each polyline
+        const npt = a.length/2, upto = Math.max(1, Math.floor(npt*g));
+        ctx.moveTo(a[0]*S+Tx, a[1]*S+Ty);
+        for (let k=1;k<=upto && k<npt;k++) ctx.lineTo(a[2*k]*S+Tx, a[2*k+1]*S+Ty);
+      }
+      ctx.stroke(); ctx.restore();
+    } else if (A.type === "face" || A.type === "plaza"){
+      const poly = A.type==="face" ? PX.f[A.fi] : PX.pl[A.pi];
+      const bb   = A.type==="face" ? PX.fb[A.fi] : PX.pb[A.pi];
+      if (!onScreen(bb)) continue;
+      const cx=(bb[0]+bb[2])/2*S+Tx, cy=(bb[1]+bb[3])/2*S+Ty;
+      ctx.save();
+      ctx.beginPath(); tracePoly(poly);
+      ctx.fillStyle = `rgba(255,201,92,${0.5*(1-A.t)})`; ctx.fill();       // gold shimmer fading out
+      ctx.strokeStyle = `rgba(255,214,120,${0.9*(1-A.t)})`; ctx.lineWidth = 2+4*(1-A.t); ctx.stroke();
+      ctx.restore();
+    }
+  }
+  // flash the newest reveal (kept for the persistent post-anim tint)
   if (flashT>0 && flashEdge>=0){
-    ctx.strokeStyle = `rgba(234,67,53,${flashT})`; ctx.lineWidth = Math.max(3,(z-11)*1.4);
+    ctx.strokeStyle = `rgba(234,67,53,${flashT*0.6})`; ctx.lineWidth = Math.max(3,(z-11)*1.4);
     ctx.beginPath(); strokePaths(flashEdge); ctx.stroke();
   }
 
@@ -362,14 +749,24 @@ function draw(){
   //    edge). Once all its edges are revealed the node disappears. Click two to
   //    connect them and reveal the street joining exactly those two.
   const nr = Math.max(1, (z-11)*0.5);            // node radius scales with zoom (small when zoomed out)
-  for (let ni=0; ni<NODES.length; ni++){
-    if (!revNode[ni] || !nodeEdges[ni].some(ei=>!revEdge[ei])) continue;
+  for (const ni of frontier){
     const x = PX.n[2*ni]*S+Tx, y = PX.n[2*ni+1]*S+Ty;
     if (x<-10||x>W+10||y<-10||y>H+10) continue;
     const sel = (ni===selNode);
     ctx.strokeStyle = sel ? "rgba(26,115,232,1)" : "rgba(245,158,11,0.95)";
     ctx.lineWidth = sel ? 2.5 : 1.5; ctx.fillStyle = sel ? "rgba(26,115,232,0.25)" : "rgba(255,255,255,0.9)";
     ctx.beginPath(); ctx.arc(x,y, sel ? nr*1.6 : nr, 0,7); ctx.fill(); ctx.stroke();
+  }
+
+  // 5b. monument icons: shown once you've explored the street nearest them
+  ctx.textAlign="center"; ctx.textBaseline="middle";
+  ctx.font = (z>=15?26:z>=13?20:15)+"px serif";
+  for (const mn of MONUMENTS){
+    if (!revEdge[mn._edge]) continue;
+    const x = mn._x*S+Tx, y = mn._y*S+Ty;
+    if (x<-20||x>W+20||y<-20||y>H+20) continue;
+    ctx.save(); ctx.shadowColor="rgba(0,0,0,.45)"; ctx.shadowBlur=4;
+    ctx.fillText(mn.e, x, y); ctx.restore();
   }
 
   // 6. names of revealed streets at close zoom (reinforces learning)
@@ -404,18 +801,54 @@ function draw(){
 }
 
 // ---- stats ----------------------------------------------------------------
-function frontierCount(){
+function frontierCount(){                         // # of distinct unrevealed edges reachable from the frontier
   const s=new Set();
-  for(let ni=0; ni<NODES.length; ni++) if(revNode[ni]) for(const ei of nodeEdges[ni]) if(!revEdge[ei]) s.add(ei);
+  for(const ni of frontier) for(const ei of nodeEdges[ni]) if(!revEdge[ei]) s.add(ei);
   return s.size;
 }
-function updateStats(){
-  const pS=(100*revEdgeCount/EDGES.length).toFixed(1), pK=(100*revKm/TOTAL_KM).toFixed(1);
+// displayed (tweened) stat values, for count-up animation
+const disp = { streets: 0, km: 0, area: 0 };
+let statsRAF = 0;
+function renderStats(){
+  const pS=(100*disp.streets/EDGES.length).toFixed(1), pK=(100*disp.km/TOTAL_KM).toFixed(1);
+  const pA=(100*disp.area/TOTAL_AREA).toFixed(1);
+  const st = streak>=2 ? `<span class="strk" id="strk">🔥 <b>${streak}</b> ${t("streak")}</span>` : "";
   document.getElementById("stats").innerHTML =
-    `<span><b>${revEdgeCount}</b> / ${EDGES.length} streets (<b>${pS}%</b>)</span>`+
-    `<span><b>${revKm.toFixed(1)}</b> / ${TOTAL_KM.toFixed(0)} km (<b>${pK}%</b>)</span>`+
-    `<span>reachable now: <b>${frontierCount()}</b></span>`;
+    `<span><b>${Math.round(disp.streets)}</b> / ${EDGES.length} ${t("streets")} (<b>${pS}%</b>)</span>`+
+    `<span><b>${disp.km.toFixed(1)}</b> / ${TOTAL_KM.toFixed(0)} ${t("km")} (<b>${pK}%</b>)</span>`+
+    `<span><b>${(disp.area/1e6).toFixed(2)}</b> / ${(TOTAL_AREA/1e6).toFixed(1)} ${t("area")} (<b>${pA}%</b>)</span>`+
+    `<span>${t("reachable")}: <b>${frontierCount()}</b></span>`+ st;
+}
+function tweenStats(){
+  let more = false;
+  for (const key of ["streets","km","area"]){
+    const target = key==="streets"?revEdgeCount : key==="km"?revKm : revArea;
+    const d = target - disp[key];
+    if (Math.abs(d) > (key==="area"?1:0.02)){ disp[key] += d*0.28; more = true; }
+    else disp[key] = target;
+  }
+  renderStats();
+  if (more) statsRAF = requestAnimationFrame(tweenStats); else statsRAF = 0;
+}
+function updateStats(instant){
+  if (instant){ disp.streets=revEdgeCount; disp.km=revKm; disp.area=revArea; renderStats(); }
+  else if (!statsRAF) statsRAF = requestAnimationFrame(tweenStats);
+  updateArrPanel();
   if (debug) updateDebugPanel();               // keep the hovered-area checklist fresh after a reveal
+}
+// per-arrondissement progress panel (sorted by % streets revealed, descending)
+function updateArrPanel(){
+  const el = document.getElementById("arr");
+  if (!ARR.length || daily){ el.style.display="none"; return; }
+  el.style.display="block";
+  const rows = ARR.map((lab,k)=>({lab, pct: arrTotKm[k]? arrKm[k]/arrTotKm[k] : 0}))
+                  .sort((a,b)=> b.pct-a.pct);
+  el.innerHTML = `<div class="ah">${t("byArr")}</div>` + rows.map(r=>{
+    const p = (100*r.pct).toFixed(0), done = r.pct>=0.999;
+    return `<div class="arow"><span class="al">${r.lab}${/^\d+$/.test(r.lab)?"e":""}</span>`+
+           `<span class="abar"><span style="width:${p}%"></span></span>`+
+           `<span class="ap">${done?"✓":p+"%"}</span></div>`;
+  }).join("");
 }
 
 // ---- guessing -------------------------------------------------------------
@@ -425,6 +858,64 @@ function flash(text, ok){
   msgEl.textContent=text; msgEl.className = ok?"ok":"bad"; msgEl.style.opacity=1;
   clearTimeout(msgTimer); msgTimer=setTimeout(()=>msgEl.style.opacity=0, 1600);
 }
+
+// ---- toast (milestones), streak flourish, confetti celebration ------------
+const toastEl = document.getElementById("toast");
+let toastTimer;
+function toast(text){
+  toastEl.textContent = text; toastEl.classList.add("show");
+  clearTimeout(toastTimer); toastTimer = setTimeout(()=>toastEl.classList.remove("show"), 2200);
+}
+let lastPctMilestone = 0, celebratedArr = new Set();
+function checkMilestones(){
+  const pct = 100*revEdgeCount/EDGES.length;
+  for (const m of [1,5,10,25,50,75,90,100]){
+    if (pct >= m && lastPctMilestone < m){
+      lastPctMilestone = m;
+      toast((LANG==="fr"?`${m}% de Paris exploré !`:`${m}% of Paris explored!`));
+      confetti(m>=100 ? 260 : 90);
+      sound(2, 60000, true);
+    }
+  }
+  // completion celebration: an arrondissement hit 100%
+  for (let k=0;k<NB;k++){
+    if (!celebratedArr.has(k) && arrTotKm[k]>0 && arrKm[k]/arrTotKm[k] >= 0.999){
+      celebratedArr.add(k);
+      toast((LANG==="fr"?`${ARR[k]}e arrondissement terminé ! 🎉`:`${ARR[k]}e arrondissement complete! 🎉`));
+      confetti(160); sound(3, 90000, true);
+    }
+  }
+}
+function flourishStreak(){
+  const el = document.getElementById("strk");
+  if (el){ el.classList.remove("pop"); void el.offsetWidth; el.classList.add("pop"); }
+}
+
+// lightweight confetti on the #fx canvas
+const fxc = document.getElementById("fx"), fxx = fxc.getContext("2d");
+let confList = [], confRAF = 0;
+function confetti(n){
+  fxc.width = W*DPR; fxc.height = H*DPR; fxc.style.width=W+"px"; fxc.style.height=H+"px";
+  fxx.setTransform(DPR,0,0,DPR,0,0); fxc.style.display="block";
+  const cols = ["#ffcf5c","#ff7a59","#4aa3ff","#7dd8a0","#e0a92e","#fff"];
+  for (let i=0;i<n;i++) confList.push({
+    x: W*(0.2+0.6*fxRand()), y: H*0.28, vx:(fxRand()-0.5)*7, vy:-4-fxRand()*7,
+    g:0.22+fxRand()*0.12, r:3+fxRand()*4, c:cols[(i*7)%cols.length], a:1, rot:fxRand()*6, vr:(fxRand()-0.5)*0.4 });
+  if (!confRAF) confRAF = requestAnimationFrame(confStep);
+}
+let fxSeed = 12345;
+function fxRand(){ fxSeed = (fxSeed*1103515245+12345) & 0x7fffffff; return fxSeed/0x7fffffff; }
+function confStep(){
+  fxx.clearRect(0,0,W,H);
+  for (const p of confList){
+    p.vy += p.g; p.x += p.vx; p.y += p.vy; p.rot += p.vr; p.a -= 0.008;
+    fxx.save(); fxx.globalAlpha = Math.max(0,p.a); fxx.translate(p.x,p.y); fxx.rotate(p.rot);
+    fxx.fillStyle = p.c; fxx.fillRect(-p.r,-p.r*0.6,p.r*2,p.r*1.2); fxx.restore();
+  }
+  confList = confList.filter(p=>p.a>0 && p.y<H+20);
+  if (confList.length) confRAF = requestAnimationFrame(confStep);
+  else { confRAF = 0; fxc.style.display="none"; }
+}
 function submitGuess(){
   const inp = document.getElementById("guess");
   const raw = inp.value.trim();
@@ -432,7 +923,7 @@ function submitGuess(){
   if (raw){ history.push(raw); histPos = history.length; }   // shell-style: ↑ recalls last typed
   if (q.length < 2) return;
   const cand = new Set();
-  for(let ni=0; ni<NODES.length; ni++) if(revNode[ni]) for(const ei of nodeEdges[ni]) if(!revEdge[ei]) cand.add(ei);
+  for(const ni of frontier) for(const ei of nodeEdges[ni]) if(!revEdge[ei]) cand.add(ei);
   let best=-1, bestD=1e9;
   for (const ei of cand){
     const c = CORE[ei]; if(!c) continue;
@@ -441,11 +932,19 @@ function submitGuess(){
   }
   const tol = 1;                               // accept the exact name plus or minus one typo
   if (best>=0 && bestD<=tol){
-    reveal(best); updateStats(); growViewToEdge(best); draw();
-    flash("✓ "+EDGES[best].n, true);
+    reveal(best); streak++; bestStreak=Math.max(bestStreak,streak);
+    updateStats(); flourishStreak(); checkMilestones(); growViewToEdge(best); draw();
+    let m = t("ok")(EDGES[best].n);
+    if (streak>=5 && streak%5===0){ m += `  🔥 ${streak}!`; toast(`🔥 ${streak} ${t("streak")}!`); }
+    flash(m, true);
   } else {
-    let known=false; for(let i=0;i<CORE.length;i++){ if(CORE[i]===q){known=true;break;} }
-    flash(known ? "That street isn't touching your revealed area yet" : "No matching street here", false);
+    streak = 0; updateStats();
+    // near-miss within 2 edits: nudge without revealing the (still-hidden) street name
+    if (best>=0 && bestD<=2) flash(t("oneOff"), false);
+    else {
+      let known=false; for(let i=0;i<CORE.length;i++){ if(CORE[i]===q){known=true;break;} }
+      flash(known ? t("notAdjacent") : t("noMatch"), false);
+    }
   }
 }
 const history = [];                              // raw submitted guesses; ↑/↓ walks them
@@ -480,6 +979,7 @@ function updateDebugPanel(){
     done.map(n=>`<div class="dd">✓ ${n}</div>`).join("");
   dbgPanel.style.display = "block";
 }
+let hoverRAF = 0;
 function onMouseMove(e){
   const x = e.containerPoint.x, y = e.containerPoint.y;
   let dirty = false;
@@ -492,13 +992,37 @@ function onMouseMove(e){
     const f = faceAt(x, y);
     if (f !== hoverFace){ hoverFace = f; dirty = true; updateDebugPanel(); }
   }
-  if (dirty) draw();
+  if (dirty && !hoverRAF) hoverRAF = requestAnimationFrame(()=>{ hoverRAF=0; draw(); });  // coalesce to 1 redraw/frame
 }
 function toggleDebug(){
   debug = !debug;
   document.getElementById("title").innerHTML = debug ? "<b>PARIS</b> · debug mode (D)" : "<b>PARIS</b> · rue par rue";
   if (!debug){ hoverFace = -1; }
+  document.getElementById("cloudpanel").style.display = debug ? "block" : "none";
+  if (debug) buildCloudPanel();
   draw(); updateDebugPanel();
+}
+// debug sliders to tune the fog cloud look; edits rebuild the cloud live
+function buildCloudPanel(){
+  const el = document.getElementById("cloudpanel");
+  if (el.dataset.built) return; el.dataset.built = "1";
+  const rows = [
+    ["freq","Frequency",0.003,0.05,0.001],
+    ["octaves","Detail",1,6,1],
+    ["opacity","Opacity",0.1,1,0.02],
+    ["tint","Tint",180,255,1],
+  ];
+  el.innerHTML = "<h4>Fog cloud</h4>" + rows.map(([k,lab,mn,mx,st])=>
+    `<label><span>${lab}</span><input type="range" data-k="${k}" min="${mn}" max="${mx}" step="${st}" value="${cloudCfg[k]}"><span class="v" id="cv_${k}">${cloudCfg[k]}</span></label>`
+  ).join("") + `<label><span></span><button id="cloudReseed" style="flex:1;cursor:pointer">Reseed / regenerate</button></label>`;
+  el.querySelectorAll("input[type=range]").forEach(inp=>{
+    inp.addEventListener("input", ()=>{
+      const k = inp.dataset.k; cloudCfg[k] = parseFloat(inp.value);
+      document.getElementById("cv_"+k).textContent = inp.value;
+      makeCloud();
+    });
+  });
+  el.querySelector("#cloudReseed").addEventListener("click", ()=>{ fogSeed = (fogSeed%97)+1; makeCloud(); });
 }
 window.addEventListener("keydown", e=>{
   if (e.key==="d" && e.target.tagName!=="INPUT"){ toggleDebug(); }
@@ -508,8 +1032,7 @@ window.addEventListener("keydown", e=>{
 function nodeAt(px, py){                          // nearest selectable (not-fully-revealed) node within grab radius
   updateXform();
   let best=-1, bd=18*18;
-  for (let ni=0; ni<NODES.length; ni++){
-    if (!revNode[ni] || !nodeEdges[ni].some(ei=>!revEdge[ei])) continue;
+  for (const ni of frontier){
     const x = PX.n[2*ni]*S+Tx, y = PX.n[2*ni+1]*S+Ty;
     const d = (x-px)**2 + (y-py)**2;
     if (d < bd){ bd = d; best = ni; }
@@ -525,18 +1048,32 @@ function onMapClick(e){
   const ei = pairEdge.get(a+","+b);
   selNode = -1;
   if (ei !== undefined && !revEdge[ei]){
-    reveal(ei); updateStats(); growViewToEdge(ei); draw();
-    flash("✓ "+EDGES[ei].n, true);
+    reveal(ei); streak++; bestStreak=Math.max(bestStreak,streak);
+    updateStats(); flourishStreak(); checkMilestones(); growViewToEdge(ei); draw();
+    flash(t("ok")(EDGES[ei].n), true);
   } else {
     draw();
-    flash(ei !== undefined ? "Already revealed" : "No single street joins just those two junctions", false);
+    flash(ei !== undefined ? t("alreadyThere") : t("noPair"), false);
   }
 }
 
-// ---- flash animation loop (only runs briefly after a reveal) --------------
-function animateFlash(){
-  if (flashT>0){ flashT = Math.max(0, flashT-0.03); draw(); requestAnimationFrame(animateFlash); }
+// ---- animation loop: advances reveal draw-on / fill anims + flash ---------
+let animRunning = false;
+function animLoop(){
+  for (const A of anim) A.t = Math.min(1, A.t + 0.06);
+  for (let i=anim.length-1;i>=0;i--) if (anim[i].t>=1) anim.splice(i,1);
+  if (flashT>0) flashT = Math.max(0, flashT-0.03);
+  draw();
+  if (anim.length || flashT>0) requestAnimationFrame(animLoop);
+  else animRunning = false;
 }
+// gentle idle drift: re-seed the fog turbulence occasionally so the mist "breathes".
+// Only when fully idle and the tab is visible; rare, since rebuilding the cloud isn't free.
+setInterval(()=>{
+  if (!map || dragging || anim.length || confList.length || statsRAF || camRAF ||
+      overlay.style.display==="flex" || document.hidden) return;
+  fogSeed = (fogSeed % 97) + 1; makeCloud();
+}, 30000);
 
 // ---- start ----------------------------------------------------------------
 function nearestEdge(lat, lon){
@@ -548,9 +1085,9 @@ function nearestEdge(lat, lon){
   return best;
 }
 function begin(lat, lon){
-  document.getElementById("loading").remove();
-  map = L.map("map", { zoomControl:false, attributionControl:true, zoomAnimation:false,
-                       minZoom:11, maxZoom:19, center:[48.8566,2.3522], zoom:13 });
+  const el=document.getElementById("loading"); if(el) el.remove();
+  map = L.map("map", { zoomControl:false, attributionControl:true, zoomAnimation:false, fadeAnimation:false,
+                       zoomSnap:0, minZoom:11, maxZoom:19, center:[48.8566,2.3522], zoom:13 });
   L.tileLayer("https://{s}.basemaps.cartocdn.com/rastertiles/voyager_nolabels/{z}/{x}/{y}{r}.png", {
     subdomains:"abcd", detectRetina:true, maxZoom:20,
     attribution:'&copy; OpenStreetMap &copy; CARTO'
@@ -558,13 +1095,20 @@ function begin(lat, lon){
   L.control.zoom({ position:"topright" }).addTo(map);
   precompute();                                    // bake world-pixel geometry + bboxes once
   resize();
-  map.on("move zoom viewreset", draw);
-  map.on("dragstart", ()=> follow=false);
+  map.on("move zoom viewreset", ()=>{ fogDirty=true; draw(); });
+  map.on("dragstart", ()=>{ follow=false; dragging=true; });
+  map.on("dragend", ()=>{ dragging=false; makeCloud(); });     // re-bake: recenter texture & resharpen
+  map.on("zoomstart", ()=>{ dragging=true; });
+  map.on("zoomend", ()=>{ dragging=false; makeCloud(); });     // re-bake at the new zoom
   map.on("click", onMapClick);
   map.on("mousemove", onMouseMove);
   map.on("mouseout", ()=>{ if(hoverEdge>=0||hoverFace>=0){ hoverEdge=-1; hoverFace=-1; hoverXY=null; draw(); updateDebugPanel(); } });
+  map.on("resize", ()=>{ resize(); draw(); if(follow) fitRevealed(); });   // fires when the map container changes size (mobile URL bar, rotate)
   cv.parentElement.addEventListener("wheel", ()=> follow=false, { passive:true });
-  window.addEventListener("resize", ()=>{ resize(); draw(); if(follow) fitRevealed(); });
+  const onViewport = ()=>{ map.invalidateSize(false); resize(); draw(); };  // mobile: URL bar show/hide, rotation
+  window.addEventListener("resize", ()=>{ onViewport(); if(follow) fitRevealed(); });
+  window.addEventListener("orientationchange", ()=> setTimeout(onViewport, 250));
+  if (window.visualViewport) window.visualViewport.addEventListener("resize", onViewport);
 
   let saved = null;
   try { saved = JSON.parse(localStorage.getItem(SAVE_KEY)); } catch(e){}
@@ -573,30 +1117,161 @@ function begin(lat, lon){
   } else {
     reveal(nearestEdge(lat, lon));
   }
-  updateStats();
-  map.whenReady(()=>{ resize(); fitRevealed(); draw(); animateFlash(); });
+  // set milestone/celebration baselines from restored progress so we don't re-toast on load
+  lastPctMilestone = 100*revEdgeCount/EDGES.length;
+  for (let k=0;k<NB;k++) if (arrTotKm[k]>0 && arrKm[k]/arrTotKm[k]>=0.999) celebratedArr.add(k);
+  updateStats(true);                              // instant (no count-up from zero on load)
+  map.whenReady(()=>{ resize(); fitRevealed(); draw(); });
   setTimeout(()=>{ resize(); draw(); }, 300);
   document.getElementById("guess").focus();
 }
 function resetGame(){
-  if (!confirm("Reset all progress and start over from your location?")) return;
+  if (!confirm(LANG==="fr"?"Réinitialiser toute la progression ?":"Reset all progress and start over?")) return;
   try { localStorage.removeItem(SAVE_KEY); } catch(e){}
   location.reload();
 }
+
+// ---- language -------------------------------------------------------------
+function applyLang(){
+  document.documentElement.lang = LANG;
+  document.getElementById("subtitle").textContent = t("subtitle");
+  document.getElementById("guess").placeholder = t("placeholder");
+  document.getElementById("recenter").title = t("recenter");
+  document.getElementById("reset").title = t("reset");
+  document.getElementById("langBtn").textContent = LANG==="fr" ? "EN" : "FR";
+  document.getElementById("rulesBtn").title = t("rules");
+  document.getElementById("fbBtn").title = t("feedback");
+  if (map) updateStats();
+}
+
+// ---- modal system ---------------------------------------------------------
+const overlay = document.getElementById("overlay"), modal = document.getElementById("modal");
+function showModal(html){ modal.innerHTML = html; overlay.style.display = "flex"; }
+function closeModal(){ overlay.style.display = "none"; }
+overlay.addEventListener("click", e=>{ if(e.target===overlay) closeModal(); });
+
+function showRules(){
+  showModal(`<h2>${t("rulesTitle")}</h2>`+
+    t("rulesBody").map(p=>`<p>${p}</p>`).join("")+
+    `<button class="primary" id="rStart">${t("rulesStart")}</button>`);
+  document.getElementById("rStart").onclick = closeModal;
+}
+
+// ---- daily 5-minute mode --------------------------------------------------
+const DAY_MS = 5*60*1000;
+let timerEnd = 0, timerIv = null, dailyStreets = 0, dailyKm = 0;
+function todaySeed(){ const d=new Date(); return d.getUTCFullYear()*10000 + (d.getUTCMonth()+1)*100 + d.getUTCDate(); }
+function seededEdge(seed){                        // deterministic start street from a seed
+  let x = (seed*2654435761) % EDGES.length; if (x<0) x+=EDGES.length;
+  return x;
+}
+function showDaily(){
+  showModal(`<h2>${t("dailyTitle")}</h2>`+
+    `<p class="big">${LANG==="fr"?"Même départ pour tout le monde aujourd'hui. Révélez un maximum de rues en 5 minutes, puis partagez votre score.":"Everyone starts from the same street today. Reveal as many streets as you can in 5 minutes, then share your score."}</p>`+
+    `<button class="primary" id="dStart">${t("dailyStart")}</button>`+
+    `<button class="ghost" id="dCancel">${t("playFree")}</button>`);
+  document.getElementById("dStart").onclick = startDaily;
+  document.getElementById("dCancel").onclick = closeModal;
+}
+function startDaily(){
+  closeModal();
+  daily = true; streak=0; bestStreak=0;
+  // wipe current state
+  revEdge.fill(0); revNode.fill(0); revFace.fill(0); revPlaza.fill(0);
+  revList.length=0; faceList.length=0; plazaList.length=0; anim.length=0; frontier.clear();
+  revEdgeCount=0; revKm=0; revArea=0; arrKm.fill(0); arrArea.fill(0); arrCntN.fill(0);
+  lastPctMilestone=0; celebratedArr.clear(); disp.streets=0; disp.km=0; disp.area=0;
+  document.getElementById("arr").style.display="none";
+  const seed = todaySeed();
+  reveal(seededEdge(seed), true);
+  dailyStreets = revEdgeCount; dailyKm = revKm;
+  updateStats(true); fitRevealed(); draw();
+  document.getElementById("guess").focus();
+  timerEnd = Date.now() + DAY_MS;
+  document.getElementById("timer").style.display="block";
+  clearInterval(timerIv); timerIv = setInterval(tickTimer, 250); tickTimer();
+}
+function tickTimer(){
+  const left = Math.max(0, timerEnd - Date.now());
+  const el = document.getElementById("timer");
+  const s = Math.ceil(left/1000);
+  el.textContent = `${Math.floor(s/60)}:${String(s%60).padStart(2,"0")} ${t("timeLeft")}`;
+  el.classList.toggle("warn", left <= 30000);
+  if (left <= 0){ clearInterval(timerIv); endDaily(); }
+}
+function endDaily(){
+  document.getElementById("timer").style.display="none";
+  const streets = revEdgeCount, km = revKm, area = revArea;
+  const grid = shareGrid(streets, km);
+  showModal(`<h2>${t("dailyOver")}</h2>`+
+    `<div class="stats-grid">`+
+      `<div class="sg"><b>${streets}</b><span>${t("streets")}</span></div>`+
+      `<div class="sg"><b>${km.toFixed(1)}</b><span>${t("km")}</span></div>`+
+      `<div class="sg"><b>${(area/1e6).toFixed(2)}</b><span>${t("area")}</span></div>`+
+      `<div class="sg"><b>${bestStreak}</b><span>${t("streak")}</span></div>`+
+    `</div>`+
+    `<div class="share">${grid}</div>`+
+    `<button class="primary" id="shareBtn">${t("share")}</button>`+
+    `<button class="ghost" id="freeBtn">${t("playFree")}</button>`);
+  const link = location.origin+location.pathname+"#daily";
+  const text = `${t("result")(new Date().toISOString().slice(0,10))}\n${grid}\n${streets} ${t("streets")} · ${km.toFixed(1)} ${t("km")}\n${link}`;
+  document.getElementById("shareBtn").onclick = ()=>{
+    navigator.clipboard.writeText(text).then(()=>flash(t("copied"), true));
+  };
+  document.getElementById("freeBtn").onclick = ()=>{ daily=false; closeModal(); location.reload(); };
+}
+function shareGrid(streets, km){                   // emoji progress bar, Wordle-style
+  const pct = Math.min(1, km/40);                  // 40 km in 5 min = full bar
+  const filled = Math.round(pct*10);
+  return "🟦".repeat(filled) + "⬜".repeat(10-filled);
+}
+
+// ---- feedback form --------------------------------------------------------
+function showFeedback(){
+  showModal(`<h2>${t("feedback")}</h2>`+
+    `<p>${LANG==="fr"?"Un bug, une idée, un mot ? Dites-moi tout.":"A bug, an idea, a kind word? Tell me anything."}</p>`+
+    `<textarea id="fbText" placeholder="${LANG==="fr"?"Votre message…":"Your message…"}"></textarea>`+
+    `<input id="fbContact" placeholder="${LANG==="fr"?"Email (optionnel)":"Email (optional)"}">`+
+    `<button class="primary" id="fbSend">${LANG==="fr"?"Envoyer":"Send"}</button>`);
+  document.getElementById("fbSend").onclick = ()=>{
+    const msg = document.getElementById("fbText").value.trim();
+    const contact = document.getElementById("fbContact").value.trim();
+    if (!msg){ closeModal(); return; }
+    const subj = encodeURIComponent("Paris rue par rue — feedback");
+    const body = encodeURIComponent(msg + (contact?`\n\n— ${contact}`:"") + `\n\n[${navigator.userAgent}]`);
+    window.location.href = `mailto:tim@darcet.fr?subject=${subj}&body=${body}`;
+    closeModal();
+  };
+}
+
 document.getElementById("reset").addEventListener("click", resetGame);
+document.getElementById("langBtn").addEventListener("click", ()=> setLang(LANG==="fr"?"en":"fr"));
+document.getElementById("rulesBtn").addEventListener("click", showRules);
+document.getElementById("dailyBtn").addEventListener("click", showDaily);
+document.getElementById("fbBtn").addEventListener("click", showFeedback);
+window.addEventListener("keydown", e=>{ if(e.key==="Escape") closeModal(); });
+
 function boot(){
+  applyLang();
   if (typeof L === "undefined"){
-    document.getElementById("loading").textContent = "Could not load the map library (need internet).";
+    document.getElementById("loading").textContent =
+      LANG==="fr" ? "Impossible de charger la carte (connexion requise)." : "Could not load the map library (need internet).";
     return;
   }
+  const wantDaily = location.hash === "#daily";
+  const firstTime = !localStorage.getItem("paris-seen-rules");
   let saved = null;
   try { saved = JSON.parse(localStorage.getItem(SAVE_KEY)); } catch(e){}
-  if (Array.isArray(saved) && saved.length){ begin(48.8566, 2.3522); return; }  // have progress, skip geo
+  const after = ()=>{
+    if (wantDaily) startDaily();
+    else if (firstTime){ localStorage.setItem("paris-seen-rules","1"); showRules(); }
+  };
+  if (Array.isArray(saved) && saved.length){ begin(48.8566, 2.3522); after(); return; }  // have progress, skip geo
   if (navigator.geolocation)
     navigator.geolocation.getCurrentPosition(
-      p => begin(p.coords.latitude, p.coords.longitude),
-      () => begin(48.8566, 2.3522), { timeout: 6000 });
-  else begin(48.8566, 2.3522);
+      p => { begin(p.coords.latitude, p.coords.longitude); after(); },
+      () => { begin(48.8566, 2.3522); after(); }, { timeout: 6000 });
+  else { begin(48.8566, 2.3522); after(); }
 }
 boot();
 </script>

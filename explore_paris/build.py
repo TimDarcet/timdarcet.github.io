@@ -2,11 +2,13 @@
 """Fetch Paris named streets from OpenStreetMap (Overpass) and emit paris.json.
 Streets = edges (ways merged by name + connectivity). Intersections = nodes shared
 by two different streets. Only the largest connected component is kept so 100% is reachable."""
-import json, math, os, sys, urllib.request, urllib.parse, collections
+import json, math, os, sys, re, urllib.request, urllib.parse, collections
 sys.setrecursionlimit(100000)
 
 AREA = 3600007444  # Paris commune boundary relation 7444
 RAW = "paris_raw.json"
+ARR_RAW = "arr_raw.json"
+PLAZA_RAW = "plaza_raw.json"
 OUT = "paris.js"
 LAT0 = math.radians(48.86); COSLAT = math.cos(LAT0)
 EXCLUDE_HW = {"steps", "elevator", "construction", "proposed", "platform", "bus_stop",
@@ -23,6 +25,66 @@ def fetch():
     d = json.loads(urllib.request.urlopen(req, timeout=300).read())
     json.dump(d, open(RAW, "w"))
     return d
+
+def fetch_arr():
+    if os.path.exists(ARR_RAW):
+        return json.load(open(ARR_RAW))
+    q = f'[out:json][timeout:120];area({AREA})->.a;relation(area.a)["boundary"="administrative"]["admin_level"="9"];out geom;'
+    print("querying arrondissements...", file=sys.stderr)
+    req = urllib.request.Request("https://overpass-api.de/api/interpreter",
+                                 data=("data=" + urllib.parse.quote(q)).encode(),
+                                 headers={"User-Agent": "paris-streets-game/1.0"})
+    d = json.loads(urllib.request.urlopen(req, timeout=120).read())
+    json.dump(d, open(ARR_RAW, "w"))
+    return d
+
+def fetch_plaza():
+    if os.path.exists(PLAZA_RAW):
+        return json.load(open(PLAZA_RAW))
+    q = (f'[out:json][timeout:120];area({AREA})->.a;'
+         '(way(area.a)["place"="square"]["name"];'
+         'way(area.a)["highway"="pedestrian"]["area"="yes"]["name"];);out geom;')
+    print("querying plazas...", file=sys.stderr)
+    req = urllib.request.Request("https://overpass-api.de/api/interpreter",
+                                 data=("data=" + urllib.parse.quote(q)).encode(),
+                                 headers={"User-Agent": "paris-streets-game/1.0"})
+    d = json.loads(urllib.request.urlopen(req, timeout=120).read())
+    json.dump(d, open(PLAZA_RAW, "w"))
+    return d
+
+def arr_polys():
+    """Return [(label, [ (lat,lon)... ring ]), ...] for the 20 arrondissements,
+    stitching each relation's outer ways into a single ring."""
+    out = []
+    for r in fetch_arr()["elements"]:
+        if r["type"] != "relation": continue
+        m = re.search(r"(\d+)(?:er|e)?\s*Arrondissement", r["tags"].get("name", ""), re.I)
+        label = m.group(1) if m else r["tags"].get("name", "?")
+        segs = [[(p["lat"], p["lon"]) for p in mem["geometry"]]
+                for mem in r["members"] if mem["type"] == "way" and mem.get("role") == "outer" and "geometry" in mem]
+        # greedily chain segments end-to-end into one ring
+        if not segs: continue
+        ring = list(segs.pop(0))
+        while segs:
+            for i, s in enumerate(segs):
+                if   ring[-1] == s[0]:  ring += s[1:];              segs.pop(i); break
+                elif ring[-1] == s[-1]: ring += s[::-1][1:];        segs.pop(i); break
+                elif ring[0]  == s[-1]: ring = s[:-1] + ring;       segs.pop(i); break
+                elif ring[0]  == s[0]:  ring = s[::-1][:-1] + ring; segs.pop(i); break
+            else:
+                break  # no more connectable segments
+        out.append((label, ring))
+    return out
+
+def pt_in_ring(lat, lon, ring):
+    inside = False; n = len(ring); j = n - 1
+    for i in range(n):
+        yi, xi = ring[i]; yj, xj = ring[j]
+        if (yi > lat) != (yj > lat) and lon < (xj - xi) * (lat - yi) / (yj - yi) + xi:
+            inside = not inside
+        j = i
+    return inside
+
 
 def haversine(a, b):
     R = 6371000
@@ -85,7 +147,8 @@ def build_faces(edges, keep_list, outidx, inter, coord):
         pts = [ll(x, y) for x, y in poly.exterior.coords[:-1]]
         pts = dp_simplify(pts + [pts[0]], 1.2e-5)[:-1]
         if len(pts) < 3: continue
-        out_faces.append({"e": sorted(set(es)), "p": [[round(la, 5), round(lo, 5)] for la, lo in pts]})
+        out_faces.append({"e": sorted(set(es)), "p": [[round(la, 5), round(lo, 5)] for la, lo in pts],
+                          "m": round(a)})    # block area in m^2
     return out_faces
 
 def main():
@@ -100,6 +163,42 @@ def main():
             if e["tags"].get("footway") in {"sidewalk", "crossing", "traffic_island", "link"}: continue
             if nm.startswith("Voie ") and "/" in nm: continue  # internal Paris code names
             ways.append((nm, [n for n in e["nodes"] if n in coord]))
+
+    # merge near-coincident INTERSECTION nodes (dual carriageways, staggered junctions) so a
+    # single visual crossing is one node. Only junctions are merged — never interior shape
+    # vertices — so street curves stay intact. Snap junctions within MERGE_M metres together.
+    MERGE_M = 6.0
+    nameuse = collections.defaultdict(set)          # node -> set of street names touching it
+    for nm, nds in ways:
+        for n in nds: nameuse[n].add(nm)
+    junctions = [n for n, names in nameuse.items() if len(names) >= 2]
+    parent = {n: n for n in junctions}
+    def find(x):
+        while parent[x] != x: parent[x] = parent[parent[x]]; x = parent[x]
+        return x
+    cell = MERGE_M / 111320.0
+    grid = collections.defaultdict(list)
+    def gk(n): la, lo = coord[n]; return (int(la / cell), int(lo * COSLAT / cell))
+    for n in junctions: grid[gk(n)].append(n)
+    for n in junctions:
+        gi, gj = gk(n)
+        for di in (-1, 0, 1):
+            for dj in (-1, 0, 1):
+                for m in grid.get((gi + di, gj + dj), []):
+                    if m <= n: continue
+                    if haversine(coord[n], coord[m]) <= MERGE_M: parent[find(n)] = find(m)
+    # representative coord = mean of each merged junction cluster; remap only those nodes
+    groups = collections.defaultdict(list)
+    for n in junctions: groups[find(n)].append(n)
+    for r, ns in groups.items():
+        coord[r] = (sum(coord[x][0] for x in ns) / len(ns), sum(coord[x][1] for x in ns) / len(ns))
+    def R(n): return find(n) if n in parent else n   # interior vertices pass through untouched
+    merged_ways = []
+    for nm, nds in ways:
+        m = [R(n) for n in nds]
+        m = [m[i] for i in range(len(m)) if i == 0 or m[i] != m[i - 1]]  # collapse consecutive dups
+        merged_ways.append((nm, m))
+    ways = merged_ways
 
     # group ways by name, split each group into connected components (shared node ids) -> street edges
     edges = []  # each: {name, ways:[[nodeid,...]], nodeset}
@@ -167,12 +266,41 @@ def main():
 
     faces = build_faces(edges, keep_list, outidx, inter, coord)
 
-    data = {"nodes": nodes, "edges": out_edges, "faces": faces}
+    # assign each street + block to an arrondissement (by representative point)
+    arr = arr_polys()
+    arr_labels = [lab for lab, _ in arr]
+    def which_arr(lat, lon):
+        for k, (lab, ring) in enumerate(arr):
+            if pt_in_ring(lat, lon, ring): return k
+        return -1
+    for e in out_edges:
+        pt = e["p"][0][len(e["p"][0]) // 2]
+        e["a"] = which_arr(pt[0], pt[1])
+    for f in faces:
+        cx = sum(p[0] for p in f["p"]) / len(f["p"]); cy = sum(p[1] for p in f["p"]) / len(f["p"])
+        f["a"] = which_arr(cx, cy)
+
+    # plazas: named square polygons that reveal when a street of the same name is revealed
+    name_edges = collections.defaultdict(list)
+    for k, e in enumerate(out_edges): name_edges[e["n"]].append(k)
+    plazas = []
+    for w in fetch_plaza()["elements"]:
+        if w["type"] != "way" or "geometry" not in w: continue
+        nm = w["tags"].get("name", ""); g = w["geometry"]
+        if nm not in name_edges or len(g) < 4 or g[0] != g[-1]: continue
+        ring = dp_simplify([(p["lat"], p["lon"]) for p in g], 8e-6)
+        if len(ring) < 4: continue
+        plazas.append({"e": sorted(name_edges[nm]),
+                       "p": [[round(la, 5), round(lo, 5)] for la, lo in ring[:-1]]})
+
+    data = {"nodes": nodes, "edges": out_edges, "faces": faces, "arr": arr_labels, "plazas": plazas}
     with open(OUT, "w") as f:                # JS assignment so the page works from file://
         f.write("window.PARIS=")
         json.dump(data, f, ensure_ascii=False, separators=(",", ":"))
+    unassigned = sum(1 for e in out_edges if e["a"] < 0)
     print(f"edges(streets)={len(out_edges)}  intersections={len(nodes)}  "
-          f"faces(blocks)={len(faces)}  total_km={total_km:.1f}", file=sys.stderr)
+          f"faces(blocks)={len(faces)}  arrondissements={len(arr_labels)}  plazas={len(plazas)}  "
+          f"unassigned_edges={unassigned}  total_km={total_km:.1f}", file=sys.stderr)
     print(f"{OUT} size={os.path.getsize(OUT)/1e6:.2f} MB", file=sys.stderr)
 
 if __name__ == "__main__":
