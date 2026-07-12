@@ -1,0 +1,604 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Paris Memory — Streets</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; overflow: hidden; background: #e9edf2;
+               font-family: ui-sans-serif, system-ui, "Segoe UI", Roboto, sans-serif; }
+  #map { position: absolute; inset: 0; z-index: 0; background: #e9edf2; }
+  #fog { position: absolute; inset: 0; z-index: 400; pointer-events: none; }
+  .leaflet-container { background: #e9edf2; }
+  .leaflet-control-attribution { font-size: 10px; background: rgba(255,255,255,.7); }
+  #hud { position: fixed; left: 0; right: 0; bottom: 0; z-index: 500;
+         padding: 12px 14px calc(12px + env(safe-area-inset-bottom));
+         background: linear-gradient(to top, rgba(20,28,40,.55), rgba(20,28,40,.18) 60%, transparent);
+         display: flex; flex-direction: column; gap: 8px; align-items: center; }
+  #entry { display: flex; gap: 8px; width: min(560px, 94vw); }
+  #guess { flex: 1; background: #fff; border: 1px solid #cdd6e0; border-radius: 10px;
+           color: #1f2a37; font-size: 16px; padding: 12px 14px; outline: none;
+           box-shadow: 0 3px 10px rgba(20,28,40,.25); }
+  #guess::placeholder { color: #94a3b3; }
+  #guess:focus { border-color: #1a73e8; box-shadow: 0 0 0 3px rgba(26,115,232,.2), 0 3px 10px rgba(20,28,40,.25); }
+  #recenter, #reset { background: #fff; border: 1px solid #cdd6e0; border-radius: 10px; color: #1a73e8;
+              font-size: 18px; padding: 0 14px; cursor: pointer; box-shadow: 0 3px 10px rgba(20,28,40,.25); }
+  #recenter:hover { border-color: #1a73e8; }
+  #reset { color: #c5221f; } #reset:hover { border-color: #c5221f; }
+  #stats { display: flex; gap: 18px; flex-wrap: wrap; justify-content: center; font-size: 13px; color: #eef3f9;
+           font-variant-numeric: tabular-nums; text-shadow: 0 1px 3px rgba(0,0,0,.6); }
+  #stats b { color: #fff; font-weight: 700; }
+  #msg { position: fixed; left: 50%; top: 18px; transform: translateX(-50%); z-index: 600;
+         padding: 9px 18px; border-radius: 999px; font-size: 14px; font-weight: 600;
+         opacity: 0; transition: opacity .25s; pointer-events: none; white-space: nowrap;
+         background: #fff; box-shadow: 0 4px 14px rgba(20,28,40,.3); }
+  #msg.ok  { color: #137333; border: 1px solid #34a853; }
+  #msg.bad { color: #c5221f; border: 1px solid #ea4335; }
+  #title { position: fixed; left: 14px; top: 12px; z-index: 500; color: #fff; font-size: 13px; letter-spacing: 1px;
+           text-shadow: 0 1px 4px rgba(0,0,0,.7); background: rgba(20,28,40,.45); padding: 5px 10px; border-radius: 8px; }
+  #debug { position: fixed; left: 14px; top: 46px; z-index: 550; display: none; max-height: 60vh; overflow-y: auto;
+           width: 260px; background: rgba(20,28,40,.92); color: #dde6f2; border: 1px solid #4b5f7a; border-radius: 8px;
+           padding: 8px 10px; font-size: 12px; font-family: ui-monospace, monospace; box-shadow: 0 4px 14px rgba(0,0,0,.4); }
+  #debug .dh { font-weight: 700; color: #c4b5fd; margin-bottom: 4px; font-family: ui-sans-serif, system-ui; }
+  #debug .dt { color: #ff9aa6; } #debug .dd { color: #7dd8a0; }
+  #title b { font-weight: 800; letter-spacing: 2px; }
+  #loading { position: fixed; inset: 0; z-index: 700; display: flex; align-items: center; justify-content: center;
+             color: #46566b; font-size: 16px; background: #e9edf2; }
+</style>
+</head>
+<body>
+<div id="map"></div>
+<canvas id="fog"></canvas>
+<svg width="0" height="0" style="position:absolute"><defs>
+  <filter id="fogEdge" x="-50%" y="-50%" width="200%" height="200%" color-interpolation-filters="sRGB">
+    <feTurbulence type="fractalNoise" baseFrequency="0.022" numOctaves="3" seed="11" result="noise"/>
+    <feDisplacementMap id="fdisp" in="SourceGraphic" in2="noise" scale="40"
+                       xChannelSelector="R" yChannelSelector="G" result="disp"/>
+    <feGaussianBlur id="fblur" in="disp" stdDeviation="1"/>
+  </filter>
+</defs></svg>
+<div id="title"><b>PARIS</b> · rue par rue</div>
+<div id="debug"></div>
+<div id="msg"></div>
+<div id="hud">
+  <div id="stats"></div>
+  <div id="entry">
+    <input id="guess" type="text" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false"
+           placeholder="Name a street touching a revealed junction…">
+    <button id="recenter" title="Recenter on discoveries">⌖</button>
+    <button id="reset" title="Reset progress">↺</button>
+  </div>
+</div>
+<div id="loading">Loading map of Paris…</div>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="paris.js"></script>
+<script>
+const D = window.PARIS, NODES = D.nodes, EDGES = D.edges;
+const TOTAL_KM = EDGES.reduce((s,e)=>s+e.k, 0);
+
+// ---- fuzzy matching -------------------------------------------------------
+const STRIP = new Set(("rue ruelle avenue place placette passage villa allee impasse boulevard bd square route "+
+  "chemin cite acces quai quaie cour cours pont sortie port promenade galerie sentier sente hameau esplanade "+
+  "parvis jardin jardins mail rond point carrefour pont petite petit grande grand vieille vieux "+
+  "de du des la le les l d aux au a en et sur").split(" "));
+function core(s){
+  let t = s.toLowerCase().normalize("NFD").replace(/\p{Diacritic}/gu,"").replace(/[^a-z0-9]+/g," ").trim()
+           .replace(/\bst\b/g,"saint").replace(/\bste\b/g,"sainte").split(" ");
+  while (t.length > 1 && STRIP.has(t[0])) t.shift();
+  return t.join("");
+}
+function lev(a,b){
+  const m=a.length,n=b.length; if(!m)return n; if(!n)return m;
+  let p=Array.from({length:n+1},(_,i)=>i);
+  for(let i=1;i<=m;i++){ let prev=p[0]; p[0]=i;
+    for(let j=1;j<=n;j++){ const t=p[j]; p[j]=Math.min(p[j]+1,p[j-1]+1,prev+(a[i-1]===b[j-1]?0:1)); prev=t; } }
+  return p[n];
+}
+const CORE = EDGES.map(e=>core(e.n));
+
+// ---- game state -----------------------------------------------------------
+const FACES = D.faces || [];
+const nodeEdges = NODES.map(()=>[]);            // node index -> edge indices touching it
+EDGES.forEach((e,ei)=> e.i.forEach(ni=> nodeEdges[ni].push(ei)));
+const edgeFaces = EDGES.map(()=>[]);            // edge index -> face indices it bounds
+FACES.forEach((f,fi)=> f.e.forEach(ei=> edgeFaces[ei].push(fi)));
+const pairEdge = new Map();                      // "nodeA,nodeB" -> edge index (street joining exactly those two)
+EDGES.forEach((e,ei)=>{ if(e.i.length===2) pairEdge.set(e.i[0]+","+e.i[1], ei); });
+const revEdge = new Uint8Array(EDGES.length);   // revealed edges
+const revNode = new Uint8Array(NODES.length);   // revealed junctions
+const revFace = new Uint8Array(FACES.length);   // fully-enclosed blocks revealed
+const revList = [];                             // revealed edge indices, reveal order
+const faceList = [];                            // revealed face indices, for drawing
+let revEdgeCount = 0, revKm = 0, flashEdge = -1, flashT = 0;
+
+const SAVE_KEY = "paris-streets-progress";
+function save(){
+  try { localStorage.setItem(SAVE_KEY, JSON.stringify(revList)); } catch(e){}
+}
+function checkFaces(ei){                         // reveal any block whose every bounding edge is now revealed
+  for (const fi of edgeFaces[ei]){
+    if (revFace[fi]) continue;
+    if (FACES[fi].e.every(e => revEdge[e])){ revFace[fi] = 1; faceList.push(fi); }
+  }
+}
+function reveal(ei, replay){
+  if (revEdge[ei]) return false;
+  revEdge[ei] = 1; revList.push(ei); revEdgeCount++; revKm += EDGES[ei].k;
+  EDGES[ei].i.forEach(ni => revNode[ni] = 1);
+  checkFaces(ei);
+  if (!replay){ flashEdge = ei; flashT = 1; save(); }
+  return true;
+}
+
+// ---- map + overlay --------------------------------------------------------
+let map, W, H, DPR, follow = true, selNode = -1, debug = false, hoverFace = -1;
+let hoverEdge = -1, hoverXY = null;              // revealed street under cursor + cursor pos, for name tooltip
+const cv = document.getElementById("fog"), ctx = cv.getContext("2d");
+const fdisp = document.getElementById("fdisp"), fblur = document.getElementById("fblur");
+function proj(lat, lon){ return map.latLngToContainerPoint([lat, lon]); }
+
+// --- fast projection: precompute each point's world-pixel at a reference zoom once
+// (the costly Mercator math), then per frame apply a cheap affine (scale+translate).
+// Also precompute world bounding boxes so we can cull off-screen geometry. -----------
+const REFZ = 16;
+let PX = null;                                    // {e:[Float64Array...][], eb:[minx,miny,maxx,maxy], n:Float64Array, f:[...], fb:[...]}
+let S = 1, Tx = 0, Ty = 0;                        // current-frame affine (world px -> screen px)
+let visMinX, visMinY, visMaxX, visMaxY;           // current-frame visible world bbox (with margin)
+
+function precompute(){
+  const eb = [], fb = [];
+  const e = EDGES.map((ed, ei)=>{
+    let mnx=1e18,mny=1e18,mxx=-1e18,mxy=-1e18;
+    const paths = ed.p.map(path=>{
+      const a = new Float64Array(path.length*2);
+      for (let k=0;k<path.length;k++){
+        const q = map.project([path[k][0], path[k][1]], REFZ);
+        a[2*k]=q.x; a[2*k+1]=q.y;
+        if(q.x<mnx)mnx=q.x; if(q.x>mxx)mxx=q.x; if(q.y<mny)mny=q.y; if(q.y>mxy)mxy=q.y;
+      }
+      return a;
+    });
+    eb[ei]=[mnx,mny,mxx,mxy]; return paths;
+  });
+  const n = new Float64Array(NODES.length*2);
+  for (let i=0;i<NODES.length;i++){ const q=map.project([NODES[i][0],NODES[i][1]], REFZ); n[2*i]=q.x; n[2*i+1]=q.y; }
+  const f = FACES.map((fc, fi)=>{
+    let mnx=1e18,mny=1e18,mxx=-1e18,mxy=-1e18;
+    const a = new Float64Array(fc.p.length*2);
+    for (let k=0;k<fc.p.length;k++){
+      const q = map.project([fc.p[k][0], fc.p[k][1]], REFZ);
+      a[2*k]=q.x; a[2*k+1]=q.y;
+      if(q.x<mnx)mnx=q.x; if(q.x>mxx)mxx=q.x; if(q.y<mny)mny=q.y; if(q.y>mxy)mxy=q.y;
+    }
+    fb[fi]=[mnx,mny,mxx,mxy]; return a;
+  });
+  PX = { e, eb, n, f, fb };
+}
+function updateXform(){                            // recompute affine + visible bbox for the current view (2 Leaflet calls)
+  const z = map.getZoom();
+  S = Math.pow(2, z - REFZ);
+  const c = map.getCenter(), cll = [c.lat, c.lng];
+  const cp = map.latLngToContainerPoint(cll), cw = map.project(cll, REFZ);
+  Tx = cp.x - cw.x*S; Ty = cp.y - cw.y*S;
+  const m = 60;                                    // margin so edge geometry near borders still draws
+  visMinX = (-m - Tx)/S; visMaxX = (W+m - Tx)/S;
+  visMinY = (-m - Ty)/S; visMaxY = (H+m - Ty)/S;
+}
+const onScreen = bb => !(bb[2]<visMinX || bb[0]>visMaxX || bb[3]<visMinY || bb[1]>visMaxY);
+
+// nearest REVEALED street within a few px of a screen point (for hover name)
+function edgeAt(px, py){
+  updateXform();
+  const r = 8, wr = r/S;                           // grab radius in px, and in world units
+  let best = -1, bd = r*r;
+  for (const ei of revList){
+    const bb = PX.eb[ei];                           // cull by world bbox (expanded by grab radius)
+    if (px<bb[0]*S+Tx-r || px>bb[2]*S+Tx+r || py<bb[1]*S+Ty-r || py>bb[3]*S+Ty+r) continue;
+    for (const a of PX.e[ei]){
+      let ax=a[0]*S+Tx, ay=a[1]*S+Ty;
+      for (let k=1;k<a.length/2;k++){
+        const bx=a[2*k]*S+Tx, by=a[2*k+1]*S+Ty;
+        const d = distToSeg(px, py, ax, ay, bx, by);
+        if (d < bd){ bd = d; best = ei; }
+        ax=bx; ay=by;
+      }
+    }
+  }
+  return best;
+}
+function distToSeg(px, py, ax, ay, bx, by){       // squared distance from point to segment
+  const dx=bx-ax, dy=by-ay, L2=dx*dx+dy*dy;
+  let t = L2 ? ((px-ax)*dx+(py-ay)*dy)/L2 : 0;
+  t = Math.max(0, Math.min(1, t));
+  const cx=ax+t*dx, cy=ay+t*dy;
+  return (px-cx)**2 + (py-cy)**2;
+}
+
+// smallest face polygon containing a screen point (ray casting in screen space)
+function faceAt(px, py){
+  updateXform();
+  let best = -1, bestArea = 1e18;
+  for (let fi=0; fi<FACES.length; fi++){
+    const bb = PX.fb[fi];
+    if (px<bb[0]*S+Tx || px>bb[2]*S+Tx || py<bb[1]*S+Ty || py>bb[3]*S+Ty) continue;  // bbox cull
+    const a = PX.f[fi]; const n = a.length/2; let inside = false;
+    for (let i=0,j=n-1; i<n; j=i++){
+      const yi=a[2*i+1]*S+Ty, yj=a[2*j+1]*S+Ty;
+      if ((yi>py)!==(yj>py)){
+        const xi=a[2*i]*S+Tx, xj=a[2*j]*S+Tx;
+        if (px < (xj-xi)*(py-yi)/(yj-yi)+xi) inside=!inside;
+      }
+    }
+    if (inside){ const ar=(bb[2]-bb[0])*(bb[3]-bb[1]); if(ar<bestArea){ bestArea=ar; best=fi; } }
+  }
+  return best;
+}
+
+// seamless procedural cloud (SVG fractal noise -> opaque grey billows, baked once per size)
+let cloudCanvas, cloudReady = false;
+function makeCloud(){
+  cloudReady = false;
+  const w = Math.ceil(W), h = Math.ceil(H);
+  const svg =
+    "<svg xmlns='http://www.w3.org/2000/svg' width='"+w+"' height='"+h+"'>"+
+      "<filter id='c' x='0' y='0' width='100%' height='100%'>"+
+        "<feTurbulence type='fractalNoise' baseFrequency='0.011 0.014' numOctaves='5' seed='7'/>"+
+        "<feColorMatrix type='matrix' values='"+
+          "0.18 0 0 0 0.74  0.18 0 0 0 0.77  0.22 0 0 0 0.82  0 0 0 0 1'/>"+   // opaque light-grey band
+      "</filter>"+
+      "<rect width='100%' height='100%' filter='url(#c)'/>"+
+    "</svg>";
+  const img = new Image();
+  img.onload = ()=>{
+    cloudCanvas = document.createElement("canvas");
+    cloudCanvas.width = w; cloudCanvas.height = h;
+    cloudCanvas.getContext("2d").drawImage(img, 0, 0);
+    cloudReady = true; draw();
+  };
+  img.src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg);
+}
+
+function resize(){
+  DPR = Math.min(window.devicePixelRatio||1, 2);
+  W = map.getSize().x; H = map.getSize().y;
+  cv.width = W*DPR; cv.height = H*DPR; cv.style.width = W+"px"; cv.style.height = H+"px";
+  ctx.setTransform(DPR,0,0,DPR,0,0);
+  makeCloud();
+}
+
+function revealedBounds(){
+  let a=90,b=-90,c=180,d=-180, any=false;
+  for (const ei of revList)
+    for (const path of EDGES[ei].p) for (const [la,lo] of path){
+      any=true; if(la<a)a=la; if(la>b)b=la; if(lo<c)c=lo; if(lo>d)d=lo;
+    }
+  return any ? L.latLngBounds([a,c],[b,d]) : null;
+}
+function fitRevealed(){
+  const bb = revealedBounds(); if(!bb) return;
+  map.fitBounds(bb, { padding:[70,120], maxZoom:16, animate:true });
+}
+function edgeBounds(ei){
+  let a=90,b=-90,c=180,d=-180;
+  for (const path of EDGES[ei].p) for (const [la,lo] of path){
+    if(la<a)a=la; if(la>b)b=la; if(lo<c)c=lo; if(lo>d)d=lo;
+  }
+  return L.latLngBounds([a,c],[b,d]);
+}
+function growViewToEdge(ei){                       // keep the current view, expand it just enough to include the new street
+  const nb = edgeBounds(ei);
+  if (map.getBounds().contains(nb)) return;        // already visible -> leave the view untouched
+  map.fitBounds(map.getBounds().extend(nb), { padding:[70,120], maxZoom:map.getZoom(), animate:true });
+}
+
+// ---- render fog + reveal overlay -----------------------------------------
+function strokePaths(ei){                          // add this edge's polylines to the current path (fast xform)
+  for (const a of PX.e[ei]){
+    ctx.moveTo(a[0]*S+Tx, a[1]*S+Ty);
+    for (let k=1;k<a.length/2;k++) ctx.lineTo(a[2*k]*S+Tx, a[2*k+1]*S+Ty);
+  }
+}
+function tracePoly(a){                              // add a face polygon (Float64Array) to the current path
+  ctx.moveTo(a[0]*S+Tx, a[1]*S+Ty);
+  for (let k=1;k<a.length/2;k++) ctx.lineTo(a[2*k]*S+Tx, a[2*k+1]*S+Ty);
+  ctx.closePath();
+}
+function draw(){
+  if (!map || !PX) return;
+  const z = map.getZoom();
+  updateXform();                                   // one-time affine + visible bbox for this frame
+  ctx.setTransform(DPR,0,0,DPR,0,0); ctx.clearRect(0,0,W,H);
+  ctx.lineCap = "round"; ctx.lineJoin = "round";
+  // reveal corridor: fixed real-world half-width (metres) -> px, so the same
+  // ground area clears at any zoom. Narrow, so it hugs the revealed street.
+  const mPerPx = 156543.03392 * Math.cos(map.getCenter().lat*Math.PI/180) / Math.pow(2, z);
+  const brush = 18 / mPerPx;
+
+  // 1. fog veil over the whole viewport: seamless procedural cloud (fallback to flat grey)
+  if (cloudReady){ ctx.drawImage(cloudCanvas, 0, 0, W, H); }
+  else { ctx.fillStyle = "rgba(224,230,237,0.985)"; ctx.fillRect(0,0,W,H); }
+
+  // 2. punch a hole along revealed streets; an SVG turbulence filter warps the edge into irregular mist
+  fdisp.setAttribute("scale", Math.max(8, brush*1.1).toFixed(0));
+  fblur.setAttribute("stdDeviation", (brush*0.35).toFixed(1));
+  ctx.globalCompositeOperation = "destination-out";
+  ctx.filter = "url(#fogEdge)";
+  ctx.beginPath();
+  for (const fi of faceList) if (onScreen(PX.fb[fi])) tracePoly(PX.f[fi]);   // enclosed blocks
+  ctx.fill();
+  ctx.strokeStyle = "rgba(0,0,0,1)"; ctx.lineWidth = brush;
+  ctx.beginPath();
+  for (const ei of revList) if (onScreen(PX.eb[ei])) strokePaths(ei);        // narrow street corridors
+  ctx.stroke();
+  ctx.filter = "none";
+  ctx.globalCompositeOperation = "source-over";
+
+  // 3. highlight revealed streets so your progress reads over the map
+  ctx.strokeStyle = "rgba(26,115,232,0.5)"; ctx.lineWidth = Math.max(2, (z-11)*0.9);
+  ctx.beginPath();
+  for (const ei of revList) if (onScreen(PX.eb[ei])) strokePaths(ei);
+  ctx.stroke();
+
+  // 4. flash the newest reveal
+  if (flashT>0 && flashEdge>=0){
+    ctx.strokeStyle = `rgba(234,67,53,${flashT})`; ctx.lineWidth = Math.max(3,(z-11)*1.4);
+    ctx.beginPath(); strokePaths(flashEdge); ctx.stroke();
+  }
+
+  // 4b. debug: highlight the reveal-area under the cursor + outline its bounding streets
+  if (debug && hoverFace >= 0){
+    ctx.beginPath(); tracePoly(PX.f[hoverFace]);
+    ctx.fillStyle = "rgba(124,58,237,0.28)"; ctx.fill();
+    ctx.strokeStyle = "rgba(124,58,237,0.9)"; ctx.lineWidth = 2; ctx.stroke();
+    for (const ei of FACES[hoverFace].e){          // green = revealed, red = still needed
+      ctx.strokeStyle = revEdge[ei] ? "rgba(16,160,80,0.95)" : "rgba(230,40,60,0.95)";
+      ctx.lineWidth = 4; ctx.beginPath(); strokePaths(ei); ctx.stroke();
+    }
+  }
+
+  // 5. junctions: shown only while not fully revealed (a node with an unrevealed
+  //    edge). Once all its edges are revealed the node disappears. Click two to
+  //    connect them and reveal the street joining exactly those two.
+  const nr = Math.max(1, (z-11)*0.5);            // node radius scales with zoom (small when zoomed out)
+  for (let ni=0; ni<NODES.length; ni++){
+    if (!revNode[ni] || !nodeEdges[ni].some(ei=>!revEdge[ei])) continue;
+    const x = PX.n[2*ni]*S+Tx, y = PX.n[2*ni+1]*S+Ty;
+    if (x<-10||x>W+10||y<-10||y>H+10) continue;
+    const sel = (ni===selNode);
+    ctx.strokeStyle = sel ? "rgba(26,115,232,1)" : "rgba(245,158,11,0.95)";
+    ctx.lineWidth = sel ? 2.5 : 1.5; ctx.fillStyle = sel ? "rgba(26,115,232,0.25)" : "rgba(255,255,255,0.9)";
+    ctx.beginPath(); ctx.arc(x,y, sel ? nr*1.6 : nr, 0,7); ctx.fill(); ctx.stroke();
+  }
+
+  // 6. names of revealed streets at close zoom (reinforces learning)
+  if (z >= 16){
+    ctx.font = "600 12px ui-sans-serif,system-ui,sans-serif"; ctx.textAlign="center"; ctx.textBaseline="middle";
+    ctx.shadowColor="#fff"; ctx.shadowBlur=5; ctx.fillStyle="rgba(20,40,90,0.95)";
+    for (const ei of revList){
+      if (!onScreen(PX.eb[ei])) continue;
+      const a = PX.e[ei][0], mk = ((a.length/2)>>1);
+      const x = a[2*mk]*S+Tx, y = a[2*mk+1]*S+Ty;
+      if (x<0||x>W||y<0||y>H) continue;
+      ctx.fillText(EDGES[ei].n, x, y);
+    }
+    ctx.shadowBlur=0;
+  }
+
+  // 7. hovered revealed street: highlight it and show its name in a tooltip by the cursor
+  if (hoverEdge >= 0 && hoverXY){
+    ctx.strokeStyle = "rgba(234,67,53,0.9)"; ctx.lineWidth = Math.max(3,(z-11)*1.3);
+    ctx.beginPath(); strokePaths(hoverEdge); ctx.stroke();
+    const label = EDGES[hoverEdge].n;
+    ctx.font = "600 13px ui-sans-serif,system-ui,sans-serif";
+    const tw = ctx.measureText(label).width, pad = 7, bw = tw+pad*2, bh = 24;
+    let bx = hoverXY.x + 14, by = hoverXY.y - bh - 8;
+    if (bx+bw > W) bx = hoverXY.x - bw - 14;
+    if (by < 0) by = hoverXY.y + 14;
+    ctx.fillStyle = "rgba(20,28,40,0.92)";
+    ctx.beginPath(); ctx.roundRect(bx, by, bw, bh, 6); ctx.fill();
+    ctx.fillStyle = "#fff"; ctx.textAlign="left"; ctx.textBaseline="middle";
+    ctx.fillText(label, bx+pad, by+bh/2);
+  }
+}
+
+// ---- stats ----------------------------------------------------------------
+function frontierCount(){
+  const s=new Set();
+  for(let ni=0; ni<NODES.length; ni++) if(revNode[ni]) for(const ei of nodeEdges[ni]) if(!revEdge[ei]) s.add(ei);
+  return s.size;
+}
+function updateStats(){
+  const pS=(100*revEdgeCount/EDGES.length).toFixed(1), pK=(100*revKm/TOTAL_KM).toFixed(1);
+  document.getElementById("stats").innerHTML =
+    `<span><b>${revEdgeCount}</b> / ${EDGES.length} streets (<b>${pS}%</b>)</span>`+
+    `<span><b>${revKm.toFixed(1)}</b> / ${TOTAL_KM.toFixed(0)} km (<b>${pK}%</b>)</span>`+
+    `<span>reachable now: <b>${frontierCount()}</b></span>`;
+  if (debug) updateDebugPanel();               // keep the hovered-area checklist fresh after a reveal
+}
+
+// ---- guessing -------------------------------------------------------------
+const msgEl = document.getElementById("msg");
+let msgTimer;
+function flash(text, ok){
+  msgEl.textContent=text; msgEl.className = ok?"ok":"bad"; msgEl.style.opacity=1;
+  clearTimeout(msgTimer); msgTimer=setTimeout(()=>msgEl.style.opacity=0, 1600);
+}
+function submitGuess(){
+  const inp = document.getElementById("guess");
+  const raw = inp.value.trim();
+  const q = core(inp.value); inp.value="";
+  if (raw){ history.push(raw); histPos = history.length; }   // shell-style: ↑ recalls last typed
+  if (q.length < 2) return;
+  const cand = new Set();
+  for(let ni=0; ni<NODES.length; ni++) if(revNode[ni]) for(const ei of nodeEdges[ni]) if(!revEdge[ei]) cand.add(ei);
+  let best=-1, bestD=1e9;
+  for (const ei of cand){
+    const c = CORE[ei]; if(!c) continue;
+    const d = lev(q, c);                       // edit distance against the full stripped name
+    if (d < bestD){ bestD=d; best=ei; }
+  }
+  const tol = 1;                               // accept the exact name plus or minus one typo
+  if (best>=0 && bestD<=tol){
+    reveal(best); updateStats(); growViewToEdge(best); draw();
+    flash("✓ "+EDGES[best].n, true);
+  } else {
+    let known=false; for(let i=0;i<CORE.length;i++){ if(CORE[i]===q){known=true;break;} }
+    flash(known ? "That street isn't touching your revealed area yet" : "No matching street here", false);
+  }
+}
+const history = [];                              // raw submitted guesses; ↑/↓ walks them
+let histPos = 0;
+document.getElementById("guess").addEventListener("keydown", e=>{
+  const inp = e.target;
+  if (e.key==="Enter"){ submitGuess(); }
+  else if (e.key==="ArrowUp"){
+    if (!history.length) return;
+    e.preventDefault(); histPos = Math.max(0, histPos-1);
+    inp.value = history[histPos]; inp.setSelectionRange(inp.value.length, inp.value.length);
+  } else if (e.key==="ArrowDown"){
+    if (!history.length) return;
+    e.preventDefault(); histPos = Math.min(history.length, histPos+1);
+    inp.value = histPos < history.length ? history[histPos] : "";
+  }
+});
+document.getElementById("recenter").addEventListener("click", ()=>{ follow=true; fitRevealed(); });
+
+// ---- debug mode: hover a place to see the reveal-area it belongs to -----------
+const dbgPanel = document.getElementById("debug");
+function updateDebugPanel(){
+  if (!debug || hoverFace < 0){ dbgPanel.style.display = "none"; return; }
+  const f = FACES[hoverFace];
+  const names = [...new Set(f.e.map(ei=>EDGES[ei].n))];   // dedupe multi-segment streets by name
+  // a street is "done" only if every one of its segments bounding this face is revealed
+  const done = names.filter(n => f.e.filter(ei=>EDGES[ei].n===n).every(ei=>revEdge[ei]));
+  const todo = names.filter(n => !done.includes(n));
+  dbgPanel.innerHTML =
+    `<div class="dh">Reveal-area #${hoverFace} · ${done.length}/${names.length} streets</div>`+
+    todo.map(n=>`<div class="dt">◻ ${n}</div>`).join("")+
+    done.map(n=>`<div class="dd">✓ ${n}</div>`).join("");
+  dbgPanel.style.display = "block";
+}
+function onMouseMove(e){
+  const x = e.containerPoint.x, y = e.containerPoint.y;
+  let dirty = false;
+  const he = edgeAt(x, y);                        // revealed street name on hover (always on)
+  if (he !== hoverEdge){ hoverEdge = he; dirty = true; }
+  hoverXY = {x, y};
+  if (hoverEdge >= 0) dirty = true;               // reposition tooltip as the cursor moves along a street
+  cv.style.cursor = hoverEdge >= 0 ? "pointer" : "";
+  if (debug){
+    const f = faceAt(x, y);
+    if (f !== hoverFace){ hoverFace = f; dirty = true; updateDebugPanel(); }
+  }
+  if (dirty) draw();
+}
+function toggleDebug(){
+  debug = !debug;
+  document.getElementById("title").innerHTML = debug ? "<b>PARIS</b> · debug mode (D)" : "<b>PARIS</b> · rue par rue";
+  if (!debug){ hoverFace = -1; }
+  draw(); updateDebugPanel();
+}
+window.addEventListener("keydown", e=>{
+  if (e.key==="d" && e.target.tagName!=="INPUT"){ toggleDebug(); }
+});
+
+// ---- click two revealed nodes to reveal the street joining exactly those two --
+function nodeAt(px, py){                          // nearest selectable (not-fully-revealed) node within grab radius
+  updateXform();
+  let best=-1, bd=18*18;
+  for (let ni=0; ni<NODES.length; ni++){
+    if (!revNode[ni] || !nodeEdges[ni].some(ei=>!revEdge[ei])) continue;
+    const x = PX.n[2*ni]*S+Tx, y = PX.n[2*ni+1]*S+Ty;
+    const d = (x-px)**2 + (y-py)**2;
+    if (d < bd){ bd = d; best = ni; }
+  }
+  return best;
+}
+function onMapClick(e){
+  const ni = nodeAt(e.containerPoint.x, e.containerPoint.y);
+  if (ni < 0){ selNode = -1; draw(); return; }
+  if (selNode < 0){ selNode = ni; draw(); return; }
+  if (ni === selNode){ selNode = -1; draw(); return; }   // click again to deselect
+  const a = Math.min(selNode, ni), b = Math.max(selNode, ni);
+  const ei = pairEdge.get(a+","+b);
+  selNode = -1;
+  if (ei !== undefined && !revEdge[ei]){
+    reveal(ei); updateStats(); growViewToEdge(ei); draw();
+    flash("✓ "+EDGES[ei].n, true);
+  } else {
+    draw();
+    flash(ei !== undefined ? "Already revealed" : "No single street joins just those two junctions", false);
+  }
+}
+
+// ---- flash animation loop (only runs briefly after a reveal) --------------
+function animateFlash(){
+  if (flashT>0){ flashT = Math.max(0, flashT-0.03); draw(); requestAnimationFrame(animateFlash); }
+}
+
+// ---- start ----------------------------------------------------------------
+function nearestEdge(lat, lon){
+  const COSLAT = Math.cos(lat*Math.PI/180); let best=0, bd=1e18;
+  for(let ei=0; ei<EDGES.length; ei++) for(const path of EDGES[ei].p) for(const [la,lo] of path){
+    const dx=(lo-lon)*COSLAT, dy=la-lat, d=dx*dx+dy*dy;
+    if(d<bd){ bd=d; best=ei; }
+  }
+  return best;
+}
+function begin(lat, lon){
+  document.getElementById("loading").remove();
+  map = L.map("map", { zoomControl:false, attributionControl:true, zoomAnimation:false,
+                       minZoom:11, maxZoom:19, center:[48.8566,2.3522], zoom:13 });
+  L.tileLayer("https://{s}.basemaps.cartocdn.com/rastertiles/voyager_nolabels/{z}/{x}/{y}{r}.png", {
+    subdomains:"abcd", detectRetina:true, maxZoom:20,
+    attribution:'&copy; OpenStreetMap &copy; CARTO'
+  }).addTo(map);
+  L.control.zoom({ position:"topright" }).addTo(map);
+  precompute();                                    // bake world-pixel geometry + bboxes once
+  resize();
+  map.on("move zoom viewreset", draw);
+  map.on("dragstart", ()=> follow=false);
+  map.on("click", onMapClick);
+  map.on("mousemove", onMouseMove);
+  map.on("mouseout", ()=>{ if(hoverEdge>=0||hoverFace>=0){ hoverEdge=-1; hoverFace=-1; hoverXY=null; draw(); updateDebugPanel(); } });
+  cv.parentElement.addEventListener("wheel", ()=> follow=false, { passive:true });
+  window.addEventListener("resize", ()=>{ resize(); draw(); if(follow) fitRevealed(); });
+
+  let saved = null;
+  try { saved = JSON.parse(localStorage.getItem(SAVE_KEY)); } catch(e){}
+  if (Array.isArray(saved) && saved.length){
+    for (const ei of saved) if (ei>=0 && ei<EDGES.length) reveal(ei, true);   // replay: no flash/save spam
+  } else {
+    reveal(nearestEdge(lat, lon));
+  }
+  updateStats();
+  map.whenReady(()=>{ resize(); fitRevealed(); draw(); animateFlash(); });
+  setTimeout(()=>{ resize(); draw(); }, 300);
+  document.getElementById("guess").focus();
+}
+function resetGame(){
+  if (!confirm("Reset all progress and start over from your location?")) return;
+  try { localStorage.removeItem(SAVE_KEY); } catch(e){}
+  location.reload();
+}
+document.getElementById("reset").addEventListener("click", resetGame);
+function boot(){
+  if (typeof L === "undefined"){
+    document.getElementById("loading").textContent = "Could not load the map library (need internet).";
+    return;
+  }
+  let saved = null;
+  try { saved = JSON.parse(localStorage.getItem(SAVE_KEY)); } catch(e){}
+  if (Array.isArray(saved) && saved.length){ begin(48.8566, 2.3522); return; }  // have progress, skip geo
+  if (navigator.geolocation)
+    navigator.geolocation.getCurrentPosition(
+      p => begin(p.coords.latitude, p.coords.longitude),
+      () => begin(48.8566, 2.3522), { timeout: 6000 });
+  else begin(48.8566, 2.3522);
+}
+boot();
+</script>
+</body>
+</html>
