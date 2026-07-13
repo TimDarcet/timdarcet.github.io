@@ -4,6 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
 <title>Paris Memory — Streets</title>
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#1a73e8">
+<link rel="apple-touch-icon" href="icon.svg">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -191,7 +194,7 @@ const I18N = {
     recenter: "Recenter on discoveries", reset: "Reset progress",
     lang: "Français", rules: "How to play", feedback: "Feedback",
     streets: "streets", km: "km", area: "km²", reachable: "reachable now",
-    streak: "streak", byArr: "By arrondissement",
+    streak: "streak", byArr: "By arrondissement", dayStreak: "day streak",
     ok: n=>"✓ "+n,
     notAdjacent: "So close — that street isn't touching your explored area yet",
     oneOff: `Almost — check your spelling and try again`,
@@ -230,7 +233,7 @@ const I18N = {
     recenter: "Recentrer sur les découvertes", reset: "Réinitialiser",
     lang: "English", rules: "Règles du jeu", feedback: "Votre avis",
     streets: "rues", km: "km", area: "km²", reachable: "accessibles",
-    streak: "série", byArr: "Par arrondissement",
+    streak: "série", byArr: "Par arrondissement", dayStreak: "jours d'affilée",
     ok: n=>"✓ "+n,
     notAdjacent: "Presque — cette rue ne touche pas encore votre zone explorée",
     oneOff: `Tout près — vérifiez l'orthographe et réessayez`,
@@ -329,6 +332,20 @@ let daily = false;                               // daily-mode flag (no persiste
 function save(){
   if (daily) return;
   try { localStorage.setItem(SAVE_KEY, JSON.stringify(revList)); } catch(e){}
+}
+
+// ---- day-streak: consecutive calendar days the game was opened -------------
+let dayStreak = 1;
+function updateDayStreak(){
+  try {
+    const today = new Date(); today.setHours(0,0,0,0); const t = today.getTime();
+    const s = JSON.parse(localStorage.getItem("paris-daystreak") || "null");
+    if (s && s.last === t){ dayStreak = s.n; return; }        // already counted today
+    const oneDay = 864e5;
+    if (s && s.last === t - oneDay) dayStreak = s.n + 1;       // played yesterday -> extend
+    else dayStreak = 1;                                        // missed a day (or first ever) -> reset
+    localStorage.setItem("paris-daystreak", JSON.stringify({ last: t, n: dayStreak }));
+  } catch(e){ dayStreak = 1; }
 }
 
 // ---- sound: WebAudio blips, pitch/volume scaled to what was revealed --------
@@ -801,11 +818,12 @@ function renderStats(){
   const pS=(100*disp.streets/EDGES.length).toFixed(1), pK=(100*disp.km/TOTAL_KM).toFixed(1);
   const pA=(100*disp.area/TOTAL_AREA).toFixed(1);
   const st = streak>=2 ? `<span class="strk" id="strk">🔥 <b>${streak}</b> ${t("streak")}</span>` : "";
+  const ds = (dayStreak>=2 && !daily) ? `<span class="strk">📅 <b>${dayStreak}</b> ${t("dayStreak")}</span>` : "";
   document.getElementById("stats").innerHTML =
     `<span><b>${Math.round(disp.streets)}</b> / ${EDGES.length} ${t("streets")} (<b>${pS}%</b>)</span>`+
     `<span><b>${disp.km.toFixed(1)}</b> / ${TOTAL_KM.toFixed(0)} ${t("km")} (<b>${pK}%</b>)</span>`+
     `<span><b>${(disp.area/1e6).toFixed(2)}</b> / ${(TOTAL_AREA/1e6).toFixed(1)} ${t("area")} (<b>${pA}%</b>)</span>`+
-    `<span>${t("reachable")}: <b>${frontierCount()}</b></span>`+ st;
+    `<span>${t("reachable")}: <b>${frontierCount()}</b></span>`+ st + ds;
 }
 function tweenStats(){
   let more = false;
@@ -922,11 +940,17 @@ function submitGuess(){
   }
   const tol = 1;                               // accept the exact name plus or minus one typo
   if (best>=0 && bestD<=tol){
-    // reveal EVERY revealable street matching this name (same core, within tolerance) at once —
-    // covers streets split into disconnected segments and same-named streets on the frontier.
+    // reveal EVERY revealable street matching this name, chaining: each reveal can extend the
+    // frontier and make more same-named streets reachable (e.g. Rue de Clichy -> Place de Clichy).
     const bc = CORE[best];
-    let revealed = 0;
-    for (const ei of cand){ if (CORE[ei]===bc && !revEdge[ei] && reveal(ei)){ revealed++; growViewToEdge(ei); } }
+    let revealed = 0, found = true;
+    while (found){
+      found = false;
+      // snapshot frontier: reveal() mutates it, so don't iterate it live
+      const cands = new Set();
+      for (const ni of frontier) for (const ei of nodeEdges[ni]) if (!revEdge[ei] && CORE[ei]===bc) cands.add(ei);
+      for (const ei of cands){ if (!revEdge[ei] && reveal(ei)){ revealed++; growViewToEdge(ei); found = true; } }
+    }
     streak++; bestStreak=Math.max(bestStreak,streak);
     updateStats(); flourishStreak(); checkMilestones(); draw();
     let m = t("ok")(EDGES[best].n);
@@ -1305,6 +1329,7 @@ window.addEventListener("keydown", e=>{ if(e.key==="Escape" && !modalLocked) clo
 
 function boot(){
   applyLang();
+  updateDayStreak();
   if (typeof L === "undefined"){
     document.getElementById("loading").textContent =
       LANG==="fr" ? "Impossible de charger la carte (connexion requise)." : "Could not load the map library (need internet).";
@@ -1337,6 +1362,10 @@ function boot(){
   else { begin(null, null); onboard(true); }
 }
 boot();
+
+// PWA: register the service worker (offline app shell + tile cache). Ignored on file://.
+if ("serviceWorker" in navigator && location.protocol.startsWith("http"))
+  window.addEventListener("load", ()=> navigator.serviceWorker.register("sw.js").catch(()=>{}));
 </script>
 </body>
 </html>
