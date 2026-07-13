@@ -53,6 +53,14 @@
            padding: 8px 10px; font-size: 12px; font-family: ui-monospace, monospace; box-shadow: 0 4px 14px rgba(0,0,0,.4); }
   #debug .dh { font-weight: 700; color: #c4b5fd; margin-bottom: 4px; font-family: ui-sans-serif, system-ui; }
   #debug .dt { color: #ff9aa6; } #debug .dd { color: #7dd8a0; }
+  #edgepanel { position: fixed; left: 14px; bottom: 96px; z-index: 560; display: none; width: 230px;
+           background: rgba(20,28,40,.94); color: #dde6f2; border: 1px solid #4b5f7a; border-radius: 10px;
+           padding: 10px 12px; font-size: 12px; font-family: ui-sans-serif, system-ui; box-shadow: 0 4px 14px rgba(0,0,0,.45); }
+  #edgepanel h4 { font-size: 12px; color: #c4b5fd; margin-bottom: 6px; }
+  #edgepanel label { display: flex; align-items: center; gap: 8px; margin: 6px 0; }
+  #edgepanel label span { width: 72px; color: #9fb2c9; }
+  #edgepanel input[type=range] { flex: 1; }
+  #edgepanel .v { width: 40px; text-align: right; color: #eaf2ff; font-variant-numeric: tabular-nums; }
   /* per-arrondissement progress: a drawer, hidden until toggled via the ▤ chip */
   #arr { position: fixed; right: 12px; top: 54px; z-index: 555; width: 190px; max-height: 72vh; overflow-y: auto;
          background: rgba(20,28,40,.94); color: #dde6f2; border: 1px solid #3a4a60; border-radius: 10px;
@@ -135,7 +143,7 @@
 <div id="vignette"></div>
 <svg width="0" height="0" style="position:absolute"><defs>
   <filter id="fogEdge" x="-50%" y="-50%" width="200%" height="200%" color-interpolation-filters="sRGB">
-    <feTurbulence type="fractalNoise" baseFrequency="0.022" numOctaves="3" seed="11" result="noise"/>
+    <feTurbulence id="fturb" type="fractalNoise" baseFrequency="0.008" numOctaves="4" seed="11" result="noise"/>
     <feDisplacementMap id="fdisp" in="SourceGraphic" in2="noise" scale="40"
                        xChannelSelector="R" yChannelSelector="G" result="disp"/>
     <feGaussianBlur id="fblur" in="disp" stdDeviation="1"/>
@@ -151,6 +159,7 @@
 </div>
 <div id="timer"></div>
 <div id="debug"></div>
+<div id="edgepanel"></div>
 <div id="arr"></div>
 <div id="msg"></div>
 <div id="hud">
@@ -393,6 +402,10 @@ const fogLayer = document.createElement("canvas"), fctx = fogLayer.getContext("2
 let fogDirty = true;                             // rebuild the cached fog layer on next draw
 const MOBILE = matchMedia("(pointer:coarse)").matches || innerWidth < 620;   // phone/tablet: lighter rendering
 const fdisp = document.getElementById("fdisp"), fblur = document.getElementById("fblur");
+const fturb = document.getElementById("fturb");
+// fog boundary tunables (debug sliders). freq/octaves/seed/type = the feTurbulence "Perlin" noise;
+// scale = displacement amount; blur = final softening.
+const edgeCfg = { freq: 0.03, octaves: 4, seed: 11, scale: 5.0, blur: 0.35, turb: 0 };
 function proj(lat, lon){ return map.latLngToContainerPoint([lat, lon]); }
 
 // --- fast projection: precompute each point's world-pixel at a reference zoom once
@@ -622,8 +635,12 @@ function renderFog(){
 
   // feathered edge: SVG turbulence on desktop (irregular mist); a plain blur while dragging
   // or on mobile (much cheaper — filters are the main per-render cost on phones).
-  fdisp.setAttribute("scale", Math.max(8, brush*1.1).toFixed(0));
-  fblur.setAttribute("stdDeviation", (brush*0.35).toFixed(1));
+  fturb.setAttribute("type", edgeCfg.turb ? "turbulence" : "fractalNoise");
+  fturb.setAttribute("baseFrequency", edgeCfg.freq);                     // Perlin frequency (lower = smoother)
+  fturb.setAttribute("numOctaves", edgeCfg.octaves);                     // Perlin detail
+  fturb.setAttribute("seed", edgeCfg.seed);                             // Perlin seed (pattern variation)
+  fdisp.setAttribute("scale", Math.max(14, brush*edgeCfg.scale).toFixed(0));  // irregularity (higher = wilder)
+  fblur.setAttribute("stdDeviation", (brush*edgeCfg.blur).toFixed(1));  // final softening
   const edgeFilter = (dragging || MOBILE) ? `blur(${(brush*0.5).toFixed(1)}px)` : "url(#fogEdge)";
 
   // 2. gilded coastline (feathered so the edge is soft & irregular)
@@ -960,7 +977,36 @@ function toggleDebug(){
   debug = !debug;
   document.getElementById("title").innerHTML = debug ? "<b>PARIS</b> · debug mode (D)" : "<b>PARIS</b> · rue par rue";
   if (!debug){ hoverFace = -1; }
+  const ep = document.getElementById("edgepanel");
+  ep.style.display = debug ? "block" : "none";
+  if (debug) buildEdgePanel();
   draw(); updateDebugPanel();
+}
+// debug sliders to tune the fog boundary: the feTurbulence "Perlin" noise + displacement + blur
+function buildEdgePanel(){
+  const el = document.getElementById("edgepanel");
+  if (el.dataset.built) return; el.dataset.built = "1";
+  const rows = [                                   // key, label, min, max, step, decimals
+    ["freq","Frequency",0.001,0.1,0.001,3],       // Perlin base frequency (lower = smoother/larger)
+    ["octaves","Octaves",1,6,1,0],                // Perlin fractal detail
+    ["seed","Seed",1,99,1,0],                     // Perlin seed (pattern)
+    ["scale","Displace",0,20,0.1,1],             // displacement amount (irregularity)
+    ["blur","Blur",0,1.5,0.05,2],                // final softening
+  ];
+  el.innerHTML = "<h4>Fog boundary (Perlin)</h4>" + rows.map(([k,lab,mn,mx,st,dp])=>
+    `<label><span>${lab}</span><input type="range" data-k="${k}" data-dp="${dp}" min="${mn}" max="${mx}" step="${st}" value="${edgeCfg[k]}">`+
+    `<span class="v" id="ev_${k}">${(+edgeCfg[k]).toFixed(dp)}</span></label>`
+  ).join("") +
+    `<label><span>Turbulence</span><input type="checkbox" id="ev_turb" ${edgeCfg.turb?"checked":""} style="flex:1"></label>`;
+  el.querySelectorAll("input[type=range]").forEach(inp=>{
+    const dp = +inp.dataset.dp;
+    inp.addEventListener("input", ()=>{
+      edgeCfg[inp.dataset.k] = parseFloat(inp.value);
+      document.getElementById("ev_"+inp.dataset.k).textContent = parseFloat(inp.value).toFixed(dp);
+      fogDirty = true; draw();
+    });
+  });
+  el.querySelector("#ev_turb").addEventListener("change", e=>{ edgeCfg.turb = e.target.checked?1:0; fogDirty=true; draw(); });
 }
 window.addEventListener("keydown", e=>{
   if (e.key==="d" && e.target.tagName!=="INPUT"){ toggleDebug(); }
