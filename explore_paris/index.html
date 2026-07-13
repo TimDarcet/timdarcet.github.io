@@ -53,16 +53,19 @@
            padding: 8px 10px; font-size: 12px; font-family: ui-monospace, monospace; box-shadow: 0 4px 14px rgba(0,0,0,.4); }
   #debug .dh { font-weight: 700; color: #c4b5fd; margin-bottom: 4px; font-family: ui-sans-serif, system-ui; }
   #debug .dt { color: #ff9aa6; } #debug .dd { color: #7dd8a0; }
-  #arr { position: fixed; right: 12px; top: 84px; z-index: 500; width: 168px; max-height: 66vh; overflow-y: auto;
-         background: rgba(20,28,40,.86); color: #dde6f2; border: 1px solid #3a4a60; border-radius: 8px;
-         padding: 8px 10px; font-size: 11px; font-family: ui-sans-serif, system-ui; box-shadow: 0 4px 14px rgba(0,0,0,.35); }
+  /* per-arrondissement progress: a drawer, hidden until toggled via the ▤ chip */
+  #arr { position: fixed; right: 12px; top: 54px; z-index: 555; width: 190px; max-height: 72vh; overflow-y: auto;
+         background: rgba(20,28,40,.94); color: #dde6f2; border: 1px solid #3a4a60; border-radius: 10px;
+         padding: 10px 12px; font-size: 11px; font-family: ui-sans-serif, system-ui; box-shadow: 0 8px 24px rgba(0,0,0,.4);
+         transform: translateX(120%); opacity: 0; pointer-events: none; transition: transform .22s ease, opacity .22s; }
+  #arr.open { transform: translateX(0); opacity: 1; pointer-events: auto; }
   #arr .ah { font-weight: 700; color: #cfe0f5; margin-bottom: 6px; letter-spacing: .3px; }
   #arr .arow { display: flex; align-items: center; gap: 6px; margin: 2px 0; font-variant-numeric: tabular-nums; }
   #arr .al { width: 24px; color: #9fb2c9; text-align: right; }
   #arr .abar { flex: 1; height: 7px; background: rgba(255,255,255,.08); border-radius: 4px; overflow: hidden; }
   #arr .abar span { display: block; height: 100%; background: linear-gradient(90deg,#1a73e8,#4aa3ff); border-radius: 4px; }
   #arr .ap { width: 30px; text-align: right; color: #eaf2ff; }
-  @media (max-width: 620px){ #arr { display: none; } }
+  #arrBtn.on { background: #1a73e8; color: #fff; border-color: #1a73e8; }
   #title b { font-weight: 700; letter-spacing: 2px; font-family: "Fraunces", Georgia, serif; }
   #toast { position: fixed; left: 50%; top: 64px; transform: translateX(-50%) translateY(-8px); z-index: 620;
            opacity: 0; transition: opacity .3s, transform .3s; pointer-events: none; white-space: nowrap;
@@ -140,6 +143,7 @@
 </defs></svg>
 <div id="title"><b>PARIS</b> · <span id="subtitle">rue par rue</span></div>
 <div id="topright">
+  <button id="arrBtn" class="chip" title="Progress by arrondissement">▤</button>
   <button id="langBtn" class="chip" title="Language">FR</button>
   <button id="rulesBtn" class="chip" title="How to play">?</button>
   <button id="dailyBtn" class="chip" title="Daily challenge">◷</button>
@@ -387,6 +391,7 @@ let hoverEdge = -1, hoverXY = null;              // revealed street under cursor
 const cv = document.getElementById("fog"), ctx = cv.getContext("2d");
 const fogLayer = document.createElement("canvas"), fctx = fogLayer.getContext("2d");  // cached fog+streets
 let fogDirty = true;                             // rebuild the cached fog layer on next draw
+const MOBILE = matchMedia("(pointer:coarse)").matches || innerWidth < 620;   // phone/tablet: lighter rendering
 const fdisp = document.getElementById("fdisp"), fblur = document.getElementById("fblur");
 function proj(lat, lon){ return map.latLngToContainerPoint([lat, lon]); }
 
@@ -523,7 +528,7 @@ function makeCloud(){                               // bake the mist texture (vi
 }
 
 function resize(){
-  DPR = Math.min(window.devicePixelRatio||1, 2);
+  DPR = Math.min(window.devicePixelRatio||1, MOBILE ? 1.5 : 2);   // cap lower on phones (fog filters are pixel-bound)
   W = map.getSize().x; H = map.getSize().y;
   for (const c of [cv, fogLayer]){ c.width = W*DPR; c.height = H*DPR; }
   cv.style.width = W+"px"; cv.style.height = H+"px";
@@ -615,12 +620,16 @@ function renderFog(){
   g.fillStyle = grad; g.fillRect(0, 0, W, H);
   if (fogTex) g.drawImage(fogTex, 0, 0, W, H);
 
-  // 2. gilded coastline (feathered like the punch, so the edge is soft & irregular)
+  // feathered edge: SVG turbulence on desktop (irregular mist); a plain blur while dragging
+  // or on mobile (much cheaper — filters are the main per-render cost on phones).
   fdisp.setAttribute("scale", Math.max(8, brush*1.1).toFixed(0));
   fblur.setAttribute("stdDeviation", (brush*0.35).toFixed(1));
+  const edgeFilter = (dragging || MOBILE) ? `blur(${(brush*0.5).toFixed(1)}px)` : "url(#fogEdge)";
+
+  // 2. gilded coastline (feathered so the edge is soft & irregular)
   g.save();
-  g.filter = dragging ? `blur(${(brush*0.6).toFixed(1)}px)` : "url(#fogEdge)";
-  g.strokeStyle = "rgba(214,168,74,0.4)"; g.lineWidth = brush + 6;
+  g.filter = edgeFilter;
+  g.strokeStyle = "rgba(214,168,74,0.4)"; g.lineWidth = brush * 1.5;   // ground-proportional -> zoom-invariant
   g.beginPath();
   for (const ei of revList) if (onScreen(PX.eb[ei])) strokePathsG(g, ei);
   for (const fi of faceList) if (onScreen(PX.fb[fi])) tracePolyG(g, PX.f[fi]);
@@ -629,7 +638,7 @@ function renderFog(){
 
   // 3. punch the holes out of the fog
   g.globalCompositeOperation = "destination-out";
-  g.filter = dragging ? `blur(${(brush*0.5).toFixed(1)}px)` : "url(#fogEdge)";
+  g.filter = edgeFilter;
   g.beginPath();
   for (const fi of faceList) if (onScreen(PX.fb[fi])) tracePolyG(g, PX.f[fi]);
   for (const pi of plazaList) if (onScreen(PX.pb[pi])) tracePolyG(g, PX.pl[pi]);
@@ -646,8 +655,8 @@ function renderFog(){
   }
   for (const ei of revList){
     if (!onScreen(PX.eb[ei])) continue;
-    const w = Math.max(1.4, (z-11)*0.7) * (0.8 + Math.min(1.1, EDGES[ei].k*0.6));
-    g.strokeStyle = "rgba(40,54,74,0.72)"; g.lineWidth = w;
+    const w = brush * 0.22 * (0.8 + Math.min(1.1, EDGES[ei].k*0.6));   // ground-proportional ink width
+    g.strokeStyle = "rgba(40,54,74,0.72)"; g.lineWidth = Math.max(0.8, w);
     g.beginPath(); strokePathsG(g, ei); g.stroke();
   }
   fogDirty = false;
@@ -656,6 +665,8 @@ function draw(){
   if (!map || !PX) return;
   const z = map.getZoom();
   updateXform();
+  const mPerPx = 156543.03392 * Math.cos(map.getCenter().lat*Math.PI/180) / Math.pow(2, z);
+  const brush = 18 / mPerPx;                         // ground-invariant unit (18 m in screen px)
   if (fogDirty) renderFog();                        // rebuild cached fog only when needed
   ctx.setTransform(1,0,0,1,0,0); ctx.clearRect(0,0,cv.width,cv.height);
   ctx.drawImage(fogLayer, 0, 0);                   // blit the cached fog (cheap)
@@ -667,7 +678,7 @@ function draw(){
     if (A.type === "edge"){
       const e = A.ei; const g = 1 - (1-A.t)*(1-A.t);       // ease-out
       ctx.strokeStyle = `rgba(255,201,92,${0.9*(1-A.t)+0.1})`;
-      ctx.lineWidth = Math.max(3,(z-11)*1.5)*(1.4-0.4*A.t);
+      ctx.lineWidth = brush*0.6*(1.4-0.4*A.t);          // ground-proportional draw-on width
       ctx.save(); ctx.beginPath();
       for (const a of PX.e[e]){                              // draw a growing fraction of each polyline
         const npt = a.length/2, upto = Math.max(1, Math.floor(npt*g));
@@ -689,7 +700,7 @@ function draw(){
   }
   // flash the newest reveal (kept for the persistent post-anim tint)
   if (flashT>0 && flashEdge>=0){
-    ctx.strokeStyle = `rgba(234,67,53,${flashT*0.6})`; ctx.lineWidth = Math.max(3,(z-11)*1.4);
+    ctx.strokeStyle = `rgba(234,67,53,${flashT*0.6})`; ctx.lineWidth = brush*0.55;
     ctx.beginPath(); strokePaths(flashEdge); ctx.stroke();
   }
 
@@ -707,7 +718,7 @@ function draw(){
   // 5. junctions: shown only while not fully revealed (a node with an unrevealed
   //    edge). Once all its edges are revealed the node disappears. Click two to
   //    connect them and reveal the street joining exactly those two.
-  const nr = Math.max(1, (z-11)*0.5);            // node radius scales with zoom (small when zoomed out)
+  const nr = 4;                                  // fixed screen-size marker (UI tap-target, not a ground feature)
   for (const ni of frontier){
     const x = PX.n[2*ni]*S+Tx, y = PX.n[2*ni+1]*S+Ty;
     if (x<-10||x>W+10||y<-10||y>H+10) continue;
@@ -734,7 +745,7 @@ function draw(){
 
   // 7. hovered revealed street: highlight it and show its name in a tooltip by the cursor
   if (hoverEdge >= 0 && hoverXY){
-    ctx.strokeStyle = "rgba(234,67,53,0.9)"; ctx.lineWidth = Math.max(3,(z-11)*1.3);
+    ctx.strokeStyle = "rgba(234,67,53,0.9)"; ctx.lineWidth = Math.max(2, brush*0.5);
     ctx.beginPath(); strokePaths(hoverEdge); ctx.stroke();
     const label = EDGES[hoverEdge].n;
     ctx.font = "600 13px ui-sans-serif,system-ui,sans-serif";
@@ -785,11 +796,13 @@ function updateStats(instant){
   updateArrPanel();
   if (debug) updateDebugPanel();               // keep the hovered-area checklist fresh after a reveal
 }
-// per-arrondissement progress panel (sorted by % streets revealed, descending)
+// per-arrondissement progress panel (sorted by % streets revealed, descending). Visibility is
+// controlled by the ▤ toggle (.open class); this only fills the content.
 function updateArrPanel(){
   const el = document.getElementById("arr");
-  if (!ARR.length || daily){ el.style.display="none"; return; }
-  el.style.display="block";
+  const btn = document.getElementById("arrBtn");
+  if (!ARR.length || daily){ el.classList.remove("open"); if(btn) btn.style.display="none"; return; }
+  if (btn) btn.style.display="";
   const rows = ARR.map((lab,k)=>({lab, pct: arrTotKm[k]? arrKm[k]/arrTotKm[k] : 0}))
                   .sort((a,b)=> b.pct-a.pct);
   el.innerHTML = `<div class="ah">${t("byArr")}</div>` + rows.map(r=>{
@@ -1195,6 +1208,10 @@ document.getElementById("langBtn").addEventListener("click", ()=> setLang(LANG==
 document.getElementById("rulesBtn").addEventListener("click", showRules);
 document.getElementById("dailyBtn").addEventListener("click", showDaily);
 document.getElementById("fbBtn").addEventListener("click", showFeedback);
+document.getElementById("arrBtn").addEventListener("click", ()=>{
+  const open = document.getElementById("arr").classList.toggle("open");
+  document.getElementById("arrBtn").classList.toggle("on", open);
+});
 window.addEventListener("keydown", e=>{ if(e.key==="Escape" && !modalLocked) closeModal(); });
 
 function boot(){
