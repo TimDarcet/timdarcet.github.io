@@ -741,6 +741,16 @@ function draw(){
       ctx.fillStyle = `rgba(255,201,92,${0.5*(1-A.t)})`; ctx.fill();       // gold shimmer fading out
       ctx.strokeStyle = `rgba(255,214,120,${0.9*(1-A.t)})`; ctx.lineWidth = 2+4*(1-A.t); ctx.stroke();
       ctx.restore();
+    } else if (A.type === "locate"){
+      // one faint glow of a known-but-unreachable street, to help you locate it under the fog
+      if (!onScreen(PX.eb[A.ei])) continue;
+      const pulse = Math.sin(A.t*Math.PI)**2;                              // single pulse (up then down)
+      ctx.save();
+      ctx.filter = `blur(${(brush*2.2).toFixed(1)}px)`;                    // strong blur -> soft glow, not a line
+      ctx.strokeStyle = `rgba(120,170,255,${0.4*pulse})`;
+      ctx.lineWidth = brush*0.7;
+      ctx.beginPath(); strokePaths(A.ei); ctx.stroke();
+      ctx.restore();
     }
   }
   // flash the newest reveal (kept for the persistent post-anim tint)
@@ -960,10 +970,19 @@ function submitGuess(){
   } else {
     streak = 0; updateStats();
     // near-miss within 2 edits: nudge without revealing the (still-hidden) street name
-    if (best>=0 && bestD<=2) flash(t("oneOff"), false);
+    if (best>=0 && bestD<=2){ flash(t("oneOff"), false); }
     else {
-      let known=false; for(let i=0;i<CORE.length;i++){ if(CORE[i]===q){known=true;break;} }
-      flash(known ? t("notAdjacent") : t("noMatch"), false);
+      // is it a real Paris street, just not reachable yet? If so, faintly flash it under the fog
+      // (only where it's on-screen — no panning) so you can spot it near your explored area.
+      const matches = [];
+      for (let i=0;i<CORE.length;i++) if (CORE[i]===q && !revEdge[i]) matches.push(i);
+      if (matches.length){
+        for (const ei of matches) anim.push({type:"locate", ei, t:0});
+        if (!animRunning){ animRunning = true; requestAnimationFrame(animLoop); }
+        flash(t("notAdjacent"), false);
+      } else {
+        flash(t("noMatch"), false);
+      }
     }
   }
 }
@@ -1098,7 +1117,7 @@ function onMapClick(e){
 // ---- animation loop: advances reveal draw-on / fill anims + flash ---------
 let animRunning = false;
 function animLoop(){
-  for (const A of anim) A.t = Math.min(1, A.t + 0.06);
+  for (const A of anim) A.t = Math.min(1, A.t + (A.type==="locate" ? 0.02 : 0.06));   // locate: one quick glow (~0.8s)
   for (let i=anim.length-1;i>=0;i--) if (anim[i].t>=1) anim.splice(i,1);
   if (flashT>0) flashT = Math.max(0, flashT-0.03);
   draw();
