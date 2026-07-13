@@ -53,14 +53,6 @@
            padding: 8px 10px; font-size: 12px; font-family: ui-monospace, monospace; box-shadow: 0 4px 14px rgba(0,0,0,.4); }
   #debug .dh { font-weight: 700; color: #c4b5fd; margin-bottom: 4px; font-family: ui-sans-serif, system-ui; }
   #debug .dt { color: #ff9aa6; } #debug .dd { color: #7dd8a0; }
-  #cloudpanel { position: fixed; left: 14px; bottom: 96px; z-index: 560; display: none; width: 240px;
-           background: rgba(20,28,40,.94); color: #dde6f2; border: 1px solid #4b5f7a; border-radius: 10px;
-           padding: 10px 12px; font-size: 12px; font-family: ui-sans-serif, system-ui; box-shadow: 0 4px 14px rgba(0,0,0,.45); }
-  #cloudpanel h4 { font-size: 12px; color: #c4b5fd; margin-bottom: 6px; letter-spacing: .3px; }
-  #cloudpanel label { display: flex; align-items: center; gap: 8px; margin: 5px 0; }
-  #cloudpanel label span { width: 58px; color: #9fb2c9; }
-  #cloudpanel input[type=range] { flex: 1; }
-  #cloudpanel .v { width: 34px; text-align: right; color: #eaf2ff; font-variant-numeric: tabular-nums; }
   #arr { position: fixed; right: 12px; top: 84px; z-index: 500; width: 168px; max-height: 66vh; overflow-y: auto;
          background: rgba(20,28,40,.86); color: #dde6f2; border: 1px solid #3a4a60; border-radius: 8px;
          padding: 8px 10px; font-size: 11px; font-family: ui-sans-serif, system-ui; box-shadow: 0 4px 14px rgba(0,0,0,.35); }
@@ -112,6 +104,9 @@
   #modal input, #modal textarea { width: 100%; border: 1px solid #cdd6e0; border-radius: 10px; padding: 10px;
            font-size: 14px; font-family: inherit; margin-bottom: 8px; }
   #modal textarea { min-height: 90px; resize: vertical; }
+  #modal .credit { margin-top: 14px; padding-top: 12px; border-top: 1px solid #e6eaf0; font-size: 12.5px;
+                   color: #6a7684; text-align: center; margin-bottom: 0; }
+  #modal .credit a { color: #1a73e8; }
   #loading { position: fixed; inset: 0; z-index: 700; display: flex; align-items: center; justify-content: center;
              color: #46566b; font-size: 16px; background: #e9edf2; }
   /* mobile: tighten HUD, shrink chips, keep everything clear of the map controls & notch */
@@ -152,7 +147,6 @@
 </div>
 <div id="timer"></div>
 <div id="debug"></div>
-<div id="cloudpanel"></div>
 <div id="arr"></div>
 <div id="msg"></div>
 <div id="hud">
@@ -174,25 +168,6 @@
 <script>
 const D = window.PARIS, NODES = D.nodes, EDGES = D.edges;
 const TOTAL_KM = EDGES.reduce((s,e)=>s+e.k, 0);
-
-// major Paris landmarks: an emoji appears once you've explored streets nearby (reward for arriving)
-const MONUMENTS = [
-  {n:"Tour Eiffel", e:"🗼", lat:48.8584, lon:2.2945},
-  {n:"Arc de Triomphe", e:"🏛️", lat:48.8738, lon:2.2950},
-  {n:"Notre-Dame", e:"⛪", lat:48.8530, lon:2.3499},
-  {n:"Sacré-Cœur", e:"⛪", lat:48.8867, lon:2.3431},
-  {n:"Louvre", e:"🖼️", lat:48.8606, lon:2.3376},
-  {n:"Panthéon", e:"🏛️", lat:48.8462, lon:2.3464},
-  {n:"Opéra Garnier", e:"🎭", lat:48.8719, lon:2.3316},
-  {n:"Tour Montparnasse", e:"🏢", lat:48.8422, lon:2.3220},
-  {n:"Les Invalides", e:"⛪", lat:48.8566, lon:2.3126},
-  {n:"Place de la Concorde", e:"🗿", lat:48.8656, lon:2.3212},
-  {n:"Bastille", e:"🕊️", lat:48.8532, lon:2.3692},
-  {n:"Gare du Nord", e:"🚉", lat:48.8809, lon:2.3553},
-  {n:"Père-Lachaise", e:"🌳", lat:48.8610, lon:2.3934},
-  {n:"Bois de Boulogne", e:"🌳", lat:48.8620, lon:2.2490},
-  {n:"Jardin du Luxembourg", e:"🌳", lat:48.8462, lon:2.3372},
-];
 
 // ---- i18n (french / english) ----------------------------------------------
 const I18N = {
@@ -223,6 +198,17 @@ const I18N = {
     dailyOver: "Time!", playFree: "Free play", share: "Copy result",
     copied: "Copied to clipboard!", daily: "Daily", timeLeft: "left",
     result: n=>`Paris daily — ${n}`,
+    startTitle: "Where to begin?",
+    startBody: "You're not in Paris — pick a starting point and reveal outward from there.",
+    startTypes: [["landmark","A famous spot"],["random","Surprise me"]],
+    startPlaces: [
+      ["Notre-Dame", 48.8530, 2.3499], ["Tour Eiffel", 48.8574, 2.2946],
+      ["Arc de Triomphe", 48.8738, 2.2950], ["Louvre", 48.8606, 2.3376],
+      ["Sacré-Cœur", 48.8867, 2.3431], ["Bastille", 48.8532, 2.3692],
+      ["Panthéon", 48.8462, 2.3464], ["République", 48.8675, 2.3636],
+    ],
+    startGo: "Start here",
+    credit: `Inspired by <a href="https://memory.pour.paris" target="_blank" rel="noopener">Paris de tête</a> by Benjamin Tran Dinh.`,
   },
   fr: {
     subtitle: "rue par rue", debugMode: "mode debug (D)",
@@ -251,6 +237,17 @@ const I18N = {
     dailyOver: "Temps écoulé !", playFree: "Jeu libre", share: "Copier le résultat",
     copied: "Copié dans le presse-papier !", daily: "Défi", timeLeft: "restant",
     result: n=>`Paris défi du jour — ${n}`,
+    startTitle: "Par où commencer ?",
+    startBody: "Vous n'êtes pas à Paris — choisissez un point de départ et dévoilez la ville à partir de là.",
+    startTypes: [["landmark","Un lieu célèbre"],["random","Au hasard"]],
+    startPlaces: [
+      ["Notre-Dame", 48.8530, 2.3499], ["Tour Eiffel", 48.8574, 2.2946],
+      ["Arc de Triomphe", 48.8738, 2.2950], ["Louvre", 48.8606, 2.3376],
+      ["Sacré-Cœur", 48.8867, 2.3431], ["Bastille", 48.8532, 2.3692],
+      ["Panthéon", 48.8462, 2.3464], ["République", 48.8675, 2.3636],
+    ],
+    startGo: "Commencer ici",
+    credit: `Inspiré par <a href="https://memory.pour.paris" target="_blank" rel="noopener">Paris de tête</a> de Benjamin Tran Dinh.`,
   },
 };
 let LANG = localStorage.getItem("paris-lang") || (navigator.language||"en").slice(0,2);
@@ -440,11 +437,6 @@ function precompute(){
     pb[pi]=[mnx,mny,mxx,mxy]; return a;
   });
   PX = { e, eb, n, f, fb, pl, pb };
-  // monuments: world-pixel position + the nearest street (icon appears once that street is revealed)
-  for (const mn of MONUMENTS){
-    const q = map.project([mn.lat, mn.lon], REFZ); mn._x = q.x; mn._y = q.y;
-    mn._edge = nearestEdge(mn.lat, mn.lon);
-  }
 }
 function updateXform(){                            // recompute affine + visible bbox for the current view (2 Leaflet calls)
   const z = map.getZoom();
@@ -506,32 +498,18 @@ function faceAt(px, py){
   return best;
 }
 
-// procedural cloud mist (SVG feTurbulence), baked to a canvas larger than the viewport and
-// ANCHORED to a world position so it pans/zooms with the ground. The warm vertical gradient is
-// drawn separately each frame in renderFog (sky-like, stays screen-fixed). Params in cloudCfg.
-let cloudTex = null, cloudReady = false, fogSeed = 7;
-let cloudBakeS = 1, cloudWX = 0, cloudWY = 0;      // scale + world top-left at bake time (for anchoring)
-const cloudCfg = {
-  freq: 0.025,      // turbulence base frequency (lower = larger, softer billows)
-  octaves: 5,       // fractal detail
-  opacity: 1.0,     // strength of the mist over the warm base
-  tint: 246,        // grey level of the mist (0..255; higher = whiter/brighter)
-};
-function makeCloud(){
+// ---- simple fog: one static feTurbulence mist over a warm gradient, baked once per size.
+// The whole fog layer is cached and only rebuilt when the view/geometry changes (fogDirty) --
+// no animation loop, no layers. Cheap on phones.
+let fogSeed = 7, fogTex = null;
+function makeCloud(){                               // bake the mist texture (viewport-sized, screen-fixed)
   if (!map) return;
-  updateXform();                                   // current affine, so we can record the anchor
-  const M = Math.round(0.35 * Math.max(W, H));     // margin: cloud extends past the viewport so pans stay covered
-  const w = Math.ceil(W) + 2*M, h = Math.ceil(H) + 2*M;
-  cloudBakeS = S;                                  // remember zoom scale this was baked at
-  cloudWX = (-M - Tx) / S;                         // world coord (at REFZ) of the cloud's top-left pixel
-  cloudWY = (-M - Ty) / S;
-  const C = cloudCfg, tt = (C.tint/255).toFixed(3);
-  // feColorMatrix maps the noise to a light-grey mist whose alpha comes from the noise itself.
+  const w = Math.ceil(W), h = Math.ceil(H);
   const svg =
     "<svg xmlns='http://www.w3.org/2000/svg' width='"+w+"' height='"+h+"'>"+
       "<filter id='c' x='0' y='0' width='100%' height='100%'>"+
-        "<feTurbulence type='fractalNoise' baseFrequency='"+C.freq.toFixed(4)+"' numOctaves='"+C.octaves+"' seed='"+fogSeed+"'/>"+
-        "<feColorMatrix type='matrix' values='0 0 0 0 "+tt+"  0 0 0 0 "+tt+"  0 0 0 0 "+(Math.min(1,C.tint/255+0.02)).toFixed(3)+"  0 0 0 "+C.opacity.toFixed(3)+" 0'/>"+
+        "<feTurbulence type='fractalNoise' baseFrequency='0.012' numOctaves='4' seed='"+fogSeed+"'/>"+
+        "<feColorMatrix type='matrix' values='0 0 0 0 0.96  0 0 0 0 0.96  0 0 0 0 0.98  0 0 0 0.85 0'/>"+
       "</filter>"+
       "<rect width='100%' height='100%' filter='url(#c)'/>"+
     "</svg>";
@@ -539,19 +517,17 @@ function makeCloud(){
   img.onload = ()=>{
     const c = document.createElement("canvas"); c.width = w; c.height = h;
     c.getContext("2d").drawImage(img, 0, 0);
-    cloudTex = c; cloudReady = true; fogDirty = true; draw();
+    fogTex = c; fogDirty = true; draw();
   };
   img.src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg);
-  fogDirty = true; draw();                          // gradient base shows immediately
 }
 
 function resize(){
   DPR = Math.min(window.devicePixelRatio||1, 2);
   W = map.getSize().x; H = map.getSize().y;
-  cv.width = W*DPR; cv.height = H*DPR; cv.style.width = W+"px"; cv.style.height = H+"px";
-  ctx.setTransform(DPR,0,0,DPR,0,0);
-  fogLayer.width = W*DPR; fogLayer.height = H*DPR;
-  fctx.setTransform(DPR,0,0,DPR,0,0);
+  for (const c of [cv, fogLayer]){ c.width = W*DPR; c.height = H*DPR; }
+  cv.style.width = W+"px"; cv.style.height = H+"px";
+  for (const cc of [ctx, fctx]) cc.setTransform(DPR,0,0,DPR,0,0);
   fogDirty = true;
   makeCloud();
 }
@@ -582,7 +558,7 @@ function tweenTo(targetCenter, targetZoom, ms){
     const lat = c0.lat + (c1.lat-c0.lat)*e, lng = c0.lng + (c1.lng-c0.lng)*e;
     map.setView([lat,lng], z0 + (z1-z0)*e, { animate:false });
     if (t<1) camRAF = requestAnimationFrame(frame);
-    else { dragging = false; makeCloud(); }        // re-bake cloud at the settled view
+    else { dragging = false; fogDirty = true; draw(); }
   }
   camRAF = requestAnimationFrame(frame);
 }
@@ -623,31 +599,25 @@ function tracePolyG(g, a){                          // add a face polygon to con
 }
 function strokePaths(ei){ strokePathsG(ctx, ei); } // overlays draw on the main context
 function tracePoly(a){ tracePolyG(ctx, a); }
-// Build the cached fog layer (cloud + turbulence-punched holes + revealed-street tint).
-// Expensive (SVG filter), so we only redo it when the view or geometry changes — NOT on
-// hover / animation frames, which just re-blit this cached layer.
+// Build the cached fog layer: warm gradient + static mist, holes punched along revealed
+// streets/blocks, gilded edge + ink streets on top. Rebuilt only on reveal/view change (fogDirty).
 function renderFog(){
   const z = map.getZoom();
   const mPerPx = 156543.03392 * Math.cos(map.getCenter().lat*Math.PI/180) / Math.pow(2, z);
   const brush = 18 / mPerPx;
   const g = fctx;
-  g.setTransform(DPR,0,0,DPR,0,0); g.clearRect(0,0,W,H);
+  g.setTransform(DPR,0,0,DPR,0,0); g.globalCompositeOperation = "source-over"; g.clearRect(0,0,W,H);
   g.lineCap = "round"; g.lineJoin = "round";
 
-  // 1. fog veil: warm sky gradient (screen-fixed) + mist texture anchored to the ground.
+  // 1. warm sky gradient + static mist
   const grad = g.createLinearGradient(0, 0, 0, H);
-  grad.addColorStop(0, "#efe7d6");     // warm cream at top
-  grad.addColorStop(1, "#d7dce4");     // cool grey at bottom
+  grad.addColorStop(0, "#efe7d6"); grad.addColorStop(1, "#d7dce4");
   g.fillStyle = grad; g.fillRect(0, 0, W, H);
-  if (cloudTex){
-    // place the baked texture at its world anchor, scaled for the current zoom -> pans/zooms with the map
-    const rel = S / cloudBakeS;                     // how much the view zoomed since bake
-    const dx = cloudWX * S + Tx, dy = cloudWY * S + Ty;
-    g.drawImage(cloudTex, dx, dy, cloudTex.width*rel, cloudTex.height*rel);
-  }
+  if (fogTex) g.drawImage(fogTex, 0, 0, W, H);
 
-  // 2. GILDED COASTLINE: a warm glow along the reveal outline, feathered with the same
-  //    turbulence filter as the punch so its outer edge is soft & irregular (not a hard ring).
+  // 2. gilded coastline (feathered like the punch, so the edge is soft & irregular)
+  fdisp.setAttribute("scale", Math.max(8, brush*1.1).toFixed(0));
+  fblur.setAttribute("stdDeviation", (brush*0.35).toFixed(1));
   g.save();
   g.filter = dragging ? `blur(${(brush*0.6).toFixed(1)}px)` : "url(#fogEdge)";
   g.strokeStyle = "rgba(214,168,74,0.4)"; g.lineWidth = brush + 6;
@@ -655,36 +625,25 @@ function renderFog(){
   for (const ei of revList) if (onScreen(PX.eb[ei])) strokePathsG(g, ei);
   for (const fi of faceList) if (onScreen(PX.fb[fi])) tracePolyG(g, PX.f[fi]);
   for (const pi of plazaList) if (onScreen(PX.pb[pi])) tracePolyG(g, PX.pl[pi]);
-  g.stroke();
-  g.filter = "none";
-  g.restore();
+  g.stroke(); g.filter = "none"; g.restore();
 
-  // 3. punch holes along revealed streets + filled blocks/plazas (turbulence when idle, cheap blur while moving)
-  fdisp.setAttribute("scale", Math.max(8, brush*1.1).toFixed(0));
-  fblur.setAttribute("stdDeviation", (brush*0.35).toFixed(1));
+  // 3. punch the holes out of the fog
   g.globalCompositeOperation = "destination-out";
   g.filter = dragging ? `blur(${(brush*0.5).toFixed(1)}px)` : "url(#fogEdge)";
   g.beginPath();
   for (const fi of faceList) if (onScreen(PX.fb[fi])) tracePolyG(g, PX.f[fi]);
   for (const pi of plazaList) if (onScreen(PX.pb[pi])) tracePolyG(g, PX.pl[pi]);
   g.fill();
-  g.strokeStyle = "rgba(0,0,0,1)"; g.lineWidth = brush;
-  g.beginPath();
+  g.strokeStyle = "#000"; g.lineWidth = brush; g.beginPath();
   for (const ei of revList) if (onScreen(PX.eb[ei])) strokePathsG(g, ei);
   g.stroke();
-  g.filter = "none";
-  g.globalCompositeOperation = "source-over";
+  g.filter = "none"; g.globalCompositeOperation = "source-over";
 
-  // 4. cleared blocks get a faint warm tint + hatch so conquered land reads at a glance
-  g.save();
+  // 4. faint warm tint on cleared blocks + revealed streets as ink
   for (const fi of faceList){
     if (!onScreen(PX.fb[fi])) continue;
-    g.beginPath(); tracePolyG(g, PX.f[fi]);
-    g.fillStyle = "rgba(214,168,74,0.07)"; g.fill();
+    g.beginPath(); tracePolyG(g, PX.f[fi]); g.fillStyle = "rgba(214,168,74,0.07)"; g.fill();
   }
-  g.restore();
-
-  // 5. revealed streets as ink, width varying by class (longer roads = thicker, like boulevards)
   for (const ei of revList){
     if (!onScreen(PX.eb[ei])) continue;
     const w = Math.max(1.4, (z-11)*0.7) * (0.8 + Math.min(1.1, EDGES[ei].k*0.6));
@@ -696,10 +655,10 @@ function renderFog(){
 function draw(){
   if (!map || !PX) return;
   const z = map.getZoom();
-  updateXform();                                   // one-time affine + visible bbox for this frame
-  if (fogDirty) renderFog();
+  updateXform();
+  if (fogDirty) renderFog();                        // rebuild cached fog only when needed
   ctx.setTransform(1,0,0,1,0,0); ctx.clearRect(0,0,cv.width,cv.height);
-  ctx.drawImage(fogLayer, 0, 0);                   // blit cached fog+streets (cheap)
+  ctx.drawImage(fogLayer, 0, 0);                   // blit the cached fog (cheap)
   ctx.setTransform(DPR,0,0,DPR,0,0);
   ctx.lineCap = "round"; ctx.lineJoin = "round";
 
@@ -758,16 +717,6 @@ function draw(){
     ctx.beginPath(); ctx.arc(x,y, sel ? nr*1.6 : nr, 0,7); ctx.fill(); ctx.stroke();
   }
 
-  // 5b. monument icons: shown once you've explored the street nearest them
-  ctx.textAlign="center"; ctx.textBaseline="middle";
-  ctx.font = (z>=15?26:z>=13?20:15)+"px serif";
-  for (const mn of MONUMENTS){
-    if (!revEdge[mn._edge]) continue;
-    const x = mn._x*S+Tx, y = mn._y*S+Ty;
-    if (x<-20||x>W+20||y<-20||y>H+20) continue;
-    ctx.save(); ctx.shadowColor="rgba(0,0,0,.45)"; ctx.shadowBlur=4;
-    ctx.fillText(mn.e, x, y); ctx.restore();
-  }
 
   // 6. names of revealed streets at close zoom (reinforces learning)
   if (z >= 16){
@@ -998,31 +947,7 @@ function toggleDebug(){
   debug = !debug;
   document.getElementById("title").innerHTML = debug ? "<b>PARIS</b> · debug mode (D)" : "<b>PARIS</b> · rue par rue";
   if (!debug){ hoverFace = -1; }
-  document.getElementById("cloudpanel").style.display = debug ? "block" : "none";
-  if (debug) buildCloudPanel();
   draw(); updateDebugPanel();
-}
-// debug sliders to tune the fog cloud look; edits rebuild the cloud live
-function buildCloudPanel(){
-  const el = document.getElementById("cloudpanel");
-  if (el.dataset.built) return; el.dataset.built = "1";
-  const rows = [
-    ["freq","Frequency",0.003,0.05,0.001],
-    ["octaves","Detail",1,6,1],
-    ["opacity","Opacity",0.1,1,0.02],
-    ["tint","Tint",180,255,1],
-  ];
-  el.innerHTML = "<h4>Fog cloud</h4>" + rows.map(([k,lab,mn,mx,st])=>
-    `<label><span>${lab}</span><input type="range" data-k="${k}" min="${mn}" max="${mx}" step="${st}" value="${cloudCfg[k]}"><span class="v" id="cv_${k}">${cloudCfg[k]}</span></label>`
-  ).join("") + `<label><span></span><button id="cloudReseed" style="flex:1;cursor:pointer">Reseed / regenerate</button></label>`;
-  el.querySelectorAll("input[type=range]").forEach(inp=>{
-    inp.addEventListener("input", ()=>{
-      const k = inp.dataset.k; cloudCfg[k] = parseFloat(inp.value);
-      document.getElementById("cv_"+k).textContent = inp.value;
-      makeCloud();
-    });
-  });
-  el.querySelector("#cloudReseed").addEventListener("click", ()=>{ fogSeed = (fogSeed%97)+1; makeCloud(); });
 }
 window.addEventListener("keydown", e=>{
   if (e.key==="d" && e.target.tagName!=="INPUT"){ toggleDebug(); }
@@ -1067,13 +992,6 @@ function animLoop(){
   if (anim.length || flashT>0) requestAnimationFrame(animLoop);
   else animRunning = false;
 }
-// gentle idle drift: re-seed the fog turbulence occasionally so the mist "breathes".
-// Only when fully idle and the tab is visible; rare, since rebuilding the cloud isn't free.
-setInterval(()=>{
-  if (!map || dragging || anim.length || confList.length || statsRAF || camRAF ||
-      overlay.style.display==="flex" || document.hidden) return;
-  fogSeed = (fogSeed % 97) + 1; makeCloud();
-}, 30000);
 
 // ---- start ----------------------------------------------------------------
 function nearestEdge(lat, lon){
@@ -1097,9 +1015,9 @@ function begin(lat, lon){
   resize();
   map.on("move zoom viewreset", ()=>{ fogDirty=true; draw(); });
   map.on("dragstart", ()=>{ follow=false; dragging=true; });
-  map.on("dragend", ()=>{ dragging=false; makeCloud(); });     // re-bake: recenter texture & resharpen
+  map.on("dragend", ()=>{ dragging=false; fogDirty=true; draw(); });
   map.on("zoomstart", ()=>{ dragging=true; });
-  map.on("zoomend", ()=>{ dragging=false; makeCloud(); });     // re-bake at the new zoom
+  map.on("zoomend", ()=>{ dragging=false; fogDirty=true; draw(); });
   map.on("click", onMapClick);
   map.on("mousemove", onMouseMove);
   map.on("mouseout", ()=>{ if(hoverEdge>=0||hoverFace>=0){ hoverEdge=-1; hoverFace=-1; hoverXY=null; draw(); updateDebugPanel(); } });
@@ -1114,7 +1032,7 @@ function begin(lat, lon){
   try { saved = JSON.parse(localStorage.getItem(SAVE_KEY)); } catch(e){}
   if (Array.isArray(saved) && saved.length){
     for (const ei of saved) if (ei>=0 && ei<EDGES.length) reveal(ei, true);   // replay: no flash/save spam
-  } else {
+  } else if (lat!=null){
     reveal(nearestEdge(lat, lon));
   }
   // set milestone/celebration baselines from restored progress so we don't re-toast on load
@@ -1123,6 +1041,14 @@ function begin(lat, lon){
   updateStats(true);                              // instant (no count-up from zero on load)
   map.whenReady(()=>{ resize(); fitRevealed(); draw(); });
   setTimeout(()=>{ resize(); draw(); }, 300);
+  document.getElementById("guess").focus();
+}
+// reveal the initial street after a start point is chosen (used by the not-in-Paris chooser)
+function seedStart(lat, lon){
+  if (revEdgeCount>0) return;                       // already seeded/restored
+  reveal(nearestEdge(lat, lon));
+  lastPctMilestone = 100*revEdgeCount/EDGES.length;
+  updateStats(true); fitRevealed(); draw();
   document.getElementById("guess").focus();
 }
 function resetGame(){
@@ -1146,15 +1072,35 @@ function applyLang(){
 
 // ---- modal system ---------------------------------------------------------
 const overlay = document.getElementById("overlay"), modal = document.getElementById("modal");
-function showModal(html){ modal.innerHTML = html; overlay.style.display = "flex"; }
-function closeModal(){ overlay.style.display = "none"; }
-overlay.addEventListener("click", e=>{ if(e.target===overlay) closeModal(); });
+let modalLocked = false;                          // when true, clicking the backdrop won't close it
+function showModal(html, locked){ modal.innerHTML = html; overlay.style.display = "flex"; modalLocked = !!locked; }
+function closeModal(){ overlay.style.display = "none"; modalLocked = false; }
+overlay.addEventListener("click", e=>{ if(e.target===overlay && !modalLocked) closeModal(); });
 
-function showRules(){
+function showRules(onClose){
   showModal(`<h2>${t("rulesTitle")}</h2>`+
     t("rulesBody").map(p=>`<p>${p}</p>`).join("")+
-    `<button class="primary" id="rStart">${t("rulesStart")}</button>`);
-  document.getElementById("rStart").onclick = closeModal;
+    `<button class="primary" id="rStart">${t("rulesStart")}</button>`+
+    `<p class="credit">${t("credit")}</p>`);
+  document.getElementById("rStart").onclick = ()=>{ closeModal(); if (typeof onClose==="function") onClose(); };
+}
+
+// start-point chooser (shown when the player isn't in Paris) -> calls done(lat,lon)
+function showStartChooser(done){
+  const places = t("startPlaces");
+  showModal(`<h2>${t("startTitle")}</h2><p>${t("startBody")}</p>`+
+    `<div id="startList">`+
+    places.map((p,i)=>`<button class="ghost" data-i="${i}" style="text-align:left">${p[0]}</button>`).join("")+
+    `<button class="ghost" data-i="rnd" style="text-align:left">🎲 ${t("startTypes")[1][1]}</button>`+
+    `</div>`, true);   // locked: must pick a start point
+  modal.querySelectorAll("#startList button").forEach(b=>{
+    b.onclick = ()=>{
+      closeModal();
+      if (b.dataset.i==="rnd"){
+        const p = places[Math.floor(Math.random()*places.length)]; done(p[1], p[2]);
+      } else { const p = places[+b.dataset.i]; done(p[1], p[2]); }
+    };
+  });
 }
 
 // ---- daily 5-minute mode --------------------------------------------------
@@ -1249,7 +1195,7 @@ document.getElementById("langBtn").addEventListener("click", ()=> setLang(LANG==
 document.getElementById("rulesBtn").addEventListener("click", showRules);
 document.getElementById("dailyBtn").addEventListener("click", showDaily);
 document.getElementById("fbBtn").addEventListener("click", showFeedback);
-window.addEventListener("keydown", e=>{ if(e.key==="Escape") closeModal(); });
+window.addEventListener("keydown", e=>{ if(e.key==="Escape" && !modalLocked) closeModal(); });
 
 function boot(){
   applyLang();
@@ -1262,16 +1208,27 @@ function boot(){
   const firstTime = !localStorage.getItem("paris-seen-rules");
   let saved = null;
   try { saved = JSON.parse(localStorage.getItem(SAVE_KEY)); } catch(e){}
-  const after = ()=>{
-    if (wantDaily) startDaily();
-    else if (firstTime){ localStorage.setItem("paris-seen-rules","1"); showRules(); }
+  const inParis = (la,lo)=> la>48.80 && la<48.91 && lo>2.21 && lo<2.48;   // Paris commune bbox (+margin)
+
+  // run the onboarding chain: (optional rules) then (optional start-point chooser)
+  const onboard = (needChooser)=>{
+    const chooser = ()=>{ if (needChooser) showStartChooser((la,lo)=> seedStart(la,lo)); };
+    if (wantDaily){ startDaily(); return; }
+    if (firstTime){ localStorage.setItem("paris-seen-rules","1"); showRules(chooser); }
+    else chooser();
   };
-  if (Array.isArray(saved) && saved.length){ begin(48.8566, 2.3522); after(); return; }  // have progress, skip geo
+
+  if (Array.isArray(saved) && saved.length){ begin(48.8566, 2.3522); onboard(false); return; }  // have progress
+  if (wantDaily){ begin(null, null); startDaily(); return; }              // daily seeds its own start
   if (navigator.geolocation)
     navigator.geolocation.getCurrentPosition(
-      p => { begin(p.coords.latitude, p.coords.longitude); after(); },
-      () => { begin(48.8566, 2.3522); after(); }, { timeout: 6000 });
-  else { begin(48.8566, 2.3522); after(); }
+      p => {
+        if (inParis(p.coords.latitude, p.coords.longitude)){ begin(p.coords.latitude, p.coords.longitude); onboard(false); }
+        else { begin(null, null); onboard(true); }
+      },
+      () => { begin(null, null); onboard(true); },                        // denied/failed -> let them choose
+      { timeout: 6000 });
+  else { begin(null, null); onboard(true); }
 }
 boot();
 </script>
