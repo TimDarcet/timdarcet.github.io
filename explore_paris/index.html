@@ -746,7 +746,7 @@ function draw(){
       if (!onScreen(PX.eb[A.ei])) continue;
       const pulse = Math.sin(A.t*Math.PI)**2;                              // single pulse (up then down)
       ctx.save();
-      ctx.filter = `blur(${(brush*2.2).toFixed(1)}px)`;                    // strong blur -> soft glow, not a line
+      ctx.filter = `blur(${(brush*4.4).toFixed(1)}px)`;                    // strong blur -> soft glow, not a line
       ctx.strokeStyle = `rgba(120,170,255,${0.4*pulse})`;
       ctx.lineWidth = brush*0.7;
       ctx.beginPath(); strokePaths(A.ei); ctx.stroke();
