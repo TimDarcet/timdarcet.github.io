@@ -53,7 +53,8 @@
            padding: 8px 10px; font-size: 12px; font-family: ui-monospace, monospace; box-shadow: 0 4px 14px rgba(0,0,0,.4); }
   #debug .dh { font-weight: 700; color: #c4b5fd; margin-bottom: 4px; font-family: ui-sans-serif, system-ui; }
   #debug .dt { color: #ff9aa6; } #debug .dd { color: #7dd8a0; }
-  #edgepanel { position: fixed; left: 14px; bottom: 96px; z-index: 560; display: none; width: 230px;
+  #edgepanel { position: fixed; right: 12px; bottom: 88px; z-index: 560; display: none; width: 220px;
+           max-height: calc(100vh - 180px); overflow-y: auto;
            background: rgba(20,28,40,.94); color: #dde6f2; border: 1px solid #4b5f7a; border-radius: 10px;
            padding: 10px 12px; font-size: 12px; font-family: ui-sans-serif, system-ui; box-shadow: 0 4px 14px rgba(0,0,0,.45); }
   #edgepanel h4 { font-size: 12px; color: #c4b5fd; margin-bottom: 6px; }
@@ -399,13 +400,14 @@ let map, W, H, DPR, follow = true, selNode = -1, debug = false, hoverFace = -1, 
 let hoverEdge = -1, hoverXY = null;              // revealed street under cursor + cursor pos, for name tooltip
 const cv = document.getElementById("fog"), ctx = cv.getContext("2d");
 const fogLayer = document.createElement("canvas"), fctx = fogLayer.getContext("2d");  // cached fog+streets
+const edgeCv = document.createElement("canvas"), ectx = edgeCv.getContext("2d");      // filtered reveal shape (baked once/rebuild)
 let fogDirty = true;                             // rebuild the cached fog layer on next draw
 const MOBILE = matchMedia("(pointer:coarse)").matches || innerWidth < 620;   // phone/tablet: lighter rendering
 const fdisp = document.getElementById("fdisp"), fblur = document.getElementById("fblur");
 const fturb = document.getElementById("fturb");
 // fog boundary tunables (debug sliders). freq/octaves/seed/type = the feTurbulence "Perlin" noise;
 // scale = displacement amount; blur = final softening.
-const edgeCfg = { freq: 0.03, octaves: 4, seed: 11, scale: 5.0, blur: 0.35, turb: 0 };
+const edgeCfg = { freq: 0.015, octaves: 3, seed: 11, scale: 10.0, blur: 0.5, turb: 0 };
 function proj(lat, lon){ return map.latLngToContainerPoint([lat, lon]); }
 
 // --- fast projection: precompute each point's world-pixel at a reference zoom once
@@ -520,14 +522,18 @@ function faceAt(px, py){
 // The whole fog layer is cached and only rebuilt when the view/geometry changes (fogDirty) --
 // no animation loop, no layers. Cheap on phones.
 let fogSeed = 7, fogTex = null;
+// fog TEXTURE tunables (debug sliders): the mist's own Perlin noise + tint + opacity
+const texCfg = { freq: 0.012, octaves: 4, tint: 0.96, opacity: 0.85, turb: 0 };
 function makeCloud(){                               // bake the mist texture (viewport-sized, screen-fixed)
   if (!map) return;
-  const w = Math.ceil(W), h = Math.ceil(H);
+  const w = Math.ceil(W), h = Math.ceil(H), C = texCfg;
+  const tt = C.tint.toFixed(3), tb = Math.min(1, C.tint+0.02).toFixed(3);
   const svg =
     "<svg xmlns='http://www.w3.org/2000/svg' width='"+w+"' height='"+h+"'>"+
       "<filter id='c' x='0' y='0' width='100%' height='100%'>"+
-        "<feTurbulence type='fractalNoise' baseFrequency='0.012' numOctaves='4' seed='"+fogSeed+"'/>"+
-        "<feColorMatrix type='matrix' values='0 0 0 0 0.96  0 0 0 0 0.96  0 0 0 0 0.98  0 0 0 0.85 0'/>"+
+        "<feTurbulence type='"+(C.turb?"turbulence":"fractalNoise")+"' baseFrequency='"+C.freq+
+          "' numOctaves='"+C.octaves+"' seed='"+fogSeed+"'/>"+
+        "<feColorMatrix type='matrix' values='0 0 0 0 "+tt+"  0 0 0 0 "+tt+"  0 0 0 0 "+tb+"  0 0 0 "+C.opacity.toFixed(3)+" 0'/>"+
       "</filter>"+
       "<rect width='100%' height='100%' filter='url(#c)'/>"+
     "</svg>";
@@ -543,9 +549,9 @@ function makeCloud(){                               // bake the mist texture (vi
 function resize(){
   DPR = Math.min(window.devicePixelRatio||1, MOBILE ? 1.5 : 2);   // cap lower on phones (fog filters are pixel-bound)
   W = map.getSize().x; H = map.getSize().y;
-  for (const c of [cv, fogLayer]){ c.width = W*DPR; c.height = H*DPR; }
+  for (const c of [cv, fogLayer, edgeCv]){ c.width = W*DPR; c.height = H*DPR; }
   cv.style.width = W+"px"; cv.style.height = H+"px";
-  for (const cc of [ctx, fctx]) cc.setTransform(DPR,0,0,DPR,0,0);
+  for (const cc of [ctx, fctx, ectx]) cc.setTransform(DPR,0,0,DPR,0,0);
   fogDirty = true;
   makeCloud();
 }
@@ -643,27 +649,32 @@ function renderFog(){
   fblur.setAttribute("stdDeviation", (brush*edgeCfg.blur).toFixed(1));  // final softening
   const edgeFilter = (dragging || MOBILE) ? `blur(${(brush*0.5).toFixed(1)}px)` : "url(#fogEdge)";
 
-  // 2. gilded coastline (feathered so the edge is soft & irregular)
-  g.save();
-  g.filter = edgeFilter;
-  g.strokeStyle = "rgba(214,168,74,0.4)"; g.lineWidth = brush * 1.5;   // ground-proportional -> zoom-invariant
-  g.beginPath();
-  for (const ei of revList) if (onScreen(PX.eb[ei])) strokePathsG(g, ei);
-  for (const fi of faceList) if (onScreen(PX.fb[fi])) tracePolyG(g, PX.f[fi]);
-  for (const pi of plazaList) if (onScreen(PX.pb[pi])) tracePolyG(g, PX.pl[pi]);
-  g.stroke(); g.filter = "none"; g.restore();
+  // bake the filtered reveal shape ONCE (the single expensive turbulence pass) into edgeCv, in gold.
+  // Both the gilded coastline and the hole-punch are then derived from it with cheap blits.
+  const e = ectx;
+  e.setTransform(DPR,0,0,DPR,0,0); e.globalCompositeOperation="source-over"; e.clearRect(0,0,W,H);
+  e.lineCap="round"; e.lineJoin="round"; e.filter = edgeFilter;
+  e.fillStyle = "rgba(214,168,74,1)"; e.strokeStyle = "rgba(214,168,74,1)"; e.lineWidth = brush;
+  e.beginPath();
+  for (const fi of faceList) if (onScreen(PX.fb[fi])) tracePolyG(e, PX.f[fi]);
+  for (const pi of plazaList) if (onScreen(PX.pb[pi])) tracePolyG(e, PX.pl[pi]);
+  e.fill();
+  e.beginPath();
+  for (const ei of revList) if (onScreen(PX.eb[ei])) strokePathsG(e, ei);
+  e.stroke();
+  e.filter = "none";
 
-  // 3. punch the holes out of the fog
+  // 2. gilded coastline: the baked shape, spread outward by a blur -> soft gold halo around the hole
+  g.save();
+  g.globalAlpha = 0.4;
+  g.filter = `blur(${(brush*(MOBILE?0.6:0.9)).toFixed(1)}px)`;
+  g.drawImage(edgeCv, 0, 0, W, H);
+  g.filter = "none"; g.globalAlpha = 1; g.restore();
+
+  // 3. punch the holes out of the fog (destination-out uses the baked shape's alpha)
   g.globalCompositeOperation = "destination-out";
-  g.filter = edgeFilter;
-  g.beginPath();
-  for (const fi of faceList) if (onScreen(PX.fb[fi])) tracePolyG(g, PX.f[fi]);
-  for (const pi of plazaList) if (onScreen(PX.pb[pi])) tracePolyG(g, PX.pl[pi]);
-  g.fill();
-  g.strokeStyle = "#000"; g.lineWidth = brush; g.beginPath();
-  for (const ei of revList) if (onScreen(PX.eb[ei])) strokePathsG(g, ei);
-  g.stroke();
-  g.filter = "none"; g.globalCompositeOperation = "source-over";
+  g.drawImage(edgeCv, 0, 0, W, H);
+  g.globalCompositeOperation = "source-over";
 
   // 4. faint warm tint on cleared blocks + revealed streets as ink
   for (const fi of faceList){
@@ -911,9 +922,15 @@ function submitGuess(){
   }
   const tol = 1;                               // accept the exact name plus or minus one typo
   if (best>=0 && bestD<=tol){
-    reveal(best); streak++; bestStreak=Math.max(bestStreak,streak);
-    updateStats(); flourishStreak(); checkMilestones(); growViewToEdge(best); draw();
+    // reveal EVERY revealable street matching this name (same core, within tolerance) at once —
+    // covers streets split into disconnected segments and same-named streets on the frontier.
+    const bc = CORE[best];
+    let revealed = 0;
+    for (const ei of cand){ if (CORE[ei]===bc && !revEdge[ei] && reveal(ei)){ revealed++; growViewToEdge(ei); } }
+    streak++; bestStreak=Math.max(bestStreak,streak);
+    updateStats(); flourishStreak(); checkMilestones(); draw();
     let m = t("ok")(EDGES[best].n);
+    if (revealed>1) m += ` ×${revealed}`;
     if (streak>=5 && streak%5===0){ m += `  🔥 ${streak}!`; toast(`🔥 ${streak} ${t("streak")}!`); }
     flash(m, true);
   } else {
@@ -982,31 +999,44 @@ function toggleDebug(){
   if (debug) buildEdgePanel();
   draw(); updateDebugPanel();
 }
-// debug sliders to tune the fog boundary: the feTurbulence "Perlin" noise + displacement + blur
+// debug sliders: fog boundary (displacement filter) + fog texture (the mist noise). Boundary edits
+// just redraw; texture edits re-bake the mist (makeCloud). Both feed feTurbulence.
 function buildEdgePanel(){
   const el = document.getElementById("edgepanel");
   if (el.dataset.built) return; el.dataset.built = "1";
-  const rows = [                                   // key, label, min, max, step, decimals
-    ["freq","Frequency",0.001,0.1,0.001,3],       // Perlin base frequency (lower = smoother/larger)
-    ["octaves","Octaves",1,6,1,0],                // Perlin fractal detail
-    ["seed","Seed",1,99,1,0],                     // Perlin seed (pattern)
-    ["scale","Displace",0,20,0.1,1],             // displacement amount (irregularity)
-    ["blur","Blur",0,1.5,0.05,2],                // final softening
+  const CFG = { edgeCfg, texCfg };                 // const configs aren't on window; look them up here
+  // [key, label, min, max, step, decimals]
+  const edgeRows = [
+    ["freq","Frequency",0.001,0.1,0.001,3], ["octaves","Octaves",1,6,1,0], ["seed","Seed",1,99,1,0],
+    ["scale","Displace",0,20,0.1,1], ["blur","Blur",0,1.5,0.05,2],
   ];
-  el.innerHTML = "<h4>Fog boundary (Perlin)</h4>" + rows.map(([k,lab,mn,mx,st,dp])=>
-    `<label><span>${lab}</span><input type="range" data-k="${k}" data-dp="${dp}" min="${mn}" max="${mx}" step="${st}" value="${edgeCfg[k]}">`+
-    `<span class="v" id="ev_${k}">${(+edgeCfg[k]).toFixed(dp)}</span></label>`
-  ).join("") +
-    `<label><span>Turbulence</span><input type="checkbox" id="ev_turb" ${edgeCfg.turb?"checked":""} style="flex:1"></label>`;
+  const texRows = [
+    ["freq","Frequency",0.002,0.08,0.001,3], ["octaves","Octaves",1,6,1,0],
+    ["tint","Tint",0.5,1,0.01,2], ["opacity","Opacity",0,1,0.02,2],
+  ];
+  const slider = (cfg, k, lab, mn, mx, st, dp)=>
+    `<label><span>${lab}</span><input type="range" data-cfg="${cfg}" data-k="${k}" data-dp="${dp}" `+
+    `min="${mn}" max="${mx}" step="${st}" value="${CFG[cfg][k]}">`+
+    `<span class="v" id="ev_${cfg}_${k}">${(+CFG[cfg][k]).toFixed(dp)}</span></label>`;
+  el.innerHTML =
+    "<h4>Fog boundary</h4>" + edgeRows.map(r=>slider("edgeCfg",...r)).join("") +
+    `<label><span>Turbulence</span><input type="checkbox" data-cfg="edgeCfg" data-k="turb" ${edgeCfg.turb?"checked":""} style="flex:1"></label>`+
+    "<h4 style='margin-top:8px'>Fog texture</h4>" + texRows.map(r=>slider("texCfg",...r)).join("") +
+    `<label><span>Turbulence</span><input type="checkbox" data-cfg="texCfg" data-k="turb" ${texCfg.turb?"checked":""} style="flex:1"></label>`;
   el.querySelectorAll("input[type=range]").forEach(inp=>{
-    const dp = +inp.dataset.dp;
+    const dp = +inp.dataset.dp, cfg = inp.dataset.cfg, k = inp.dataset.k;
     inp.addEventListener("input", ()=>{
-      edgeCfg[inp.dataset.k] = parseFloat(inp.value);
-      document.getElementById("ev_"+inp.dataset.k).textContent = parseFloat(inp.value).toFixed(dp);
-      fogDirty = true; draw();
+      CFG[cfg][k] = parseFloat(inp.value);
+      document.getElementById("ev_"+cfg+"_"+k).textContent = parseFloat(inp.value).toFixed(dp);
+      if (cfg==="texCfg") makeCloud(); else { fogDirty = true; draw(); }
     });
   });
-  el.querySelector("#ev_turb").addEventListener("change", e=>{ edgeCfg.turb = e.target.checked?1:0; fogDirty=true; draw(); });
+  el.querySelectorAll("input[type=checkbox]").forEach(cb=>{
+    cb.addEventListener("change", ()=>{
+      CFG[cb.dataset.cfg][cb.dataset.k] = cb.checked?1:0;
+      if (cb.dataset.cfg==="texCfg") makeCloud(); else { fogDirty = true; draw(); }
+    });
+  });
 }
 window.addEventListener("keydown", e=>{
   if (e.key==="d" && e.target.tagName!=="INPUT"){ toggleDebug(); }
