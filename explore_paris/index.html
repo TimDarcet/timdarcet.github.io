@@ -1263,19 +1263,32 @@ function shareGrid(streets, km){                   // emoji progress bar, Wordle
 
 // ---- feedback form --------------------------------------------------------
 function showFeedback(){
+  const FR = LANG==="fr";
   showModal(`<h2>${t("feedback")}</h2>`+
-    `<p>${LANG==="fr"?"Un bug, une idée, un mot ? Dites-moi tout.":"A bug, an idea, a kind word? Tell me anything."}</p>`+
-    `<textarea id="fbText" placeholder="${LANG==="fr"?"Votre message…":"Your message…"}"></textarea>`+
-    `<input id="fbContact" placeholder="${LANG==="fr"?"Email (optionnel)":"Email (optional)"}">`+
-    `<button class="primary" id="fbSend">${LANG==="fr"?"Envoyer":"Send"}</button>`);
+    `<p>${FR?"Un bug, une idée, un mot ? Dites-moi tout.":"A bug, an idea, a kind word? Tell me anything."}</p>`+
+    `<textarea id="fbText" placeholder="${FR?"Votre message…":"Your message…"}"></textarea>`+
+    `<input id="fbContact" placeholder="${FR?"Email (optionnel)":"Email (optional)"}">`+
+    `<button class="primary" id="fbSend">${FR?"Envoyer":"Send"}</button>`);
   document.getElementById("fbSend").onclick = ()=>{
     const msg = document.getElementById("fbText").value.trim();
     const contact = document.getElementById("fbContact").value.trim();
     if (!msg){ closeModal(); return; }
-    const subj = encodeURIComponent("Paris rue par rue — feedback");
-    const body = encodeURIComponent(msg + (contact?`\n\n— ${contact}`:"") + `\n\n[${navigator.userAgent}]`);
-    window.location.href = `mailto:tim@darcet.fr?subject=${subj}&body=${body}`;
-    closeModal();
+    const btn = document.getElementById("fbSend");
+    btn.disabled = true; btn.textContent = FR?"Envoi…":"Sending…";
+    // FormSubmit (no backend/account): posts to the AJAX endpoint, which emails timothee.darcet@gmail.com
+    fetch("https://formsubmit.co/ajax/timothee.darcet@gmail.com", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Accept": "application/json" },
+      body: JSON.stringify({
+        _subject: "Paris rue par rue — feedback",
+        message: msg,
+        contact: contact || "(none)",
+        agent: navigator.userAgent,
+      }),
+    })
+    .then(r => { if(!r.ok) throw 0; return r.json(); })
+    .then(()=>{ closeModal(); flash(FR?"Merci pour votre retour !":"Thanks for the feedback!", true); })
+    .catch(()=>{ closeModal(); flash(FR?"Échec de l'envoi — réessayez plus tard":"Couldn't send — try again later", false); });
   };
 }
 
