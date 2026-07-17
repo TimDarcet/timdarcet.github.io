@@ -44,10 +44,19 @@ function core(s){
   while (t.length > 1 && STRIP.has(t[0])) t.shift();
   return t.join("");
 }
+// Damerau-Levenshtein (OSA): like edit distance but an adjacent transposition (e.g. Cartoux/Catroux)
+// costs 1 instead of 2. Needs the i-2 row, so three rolling rows rather than one.
 function lev(a,b){
   const m=a.length,n=b.length; if(!m)return n; if(!n)return m;
-  let p=Array.from({length:n+1},(_,i)=>i);
-  for(let i=1;i<=m;i++){ let prev=p[0]; p[0]=i;
-    for(let j=1;j<=n;j++){ const t=p[j]; p[j]=Math.min(p[j]+1,p[j-1]+1,prev+(a[i-1]===b[j-1]?0:1)); prev=t; } }
-  return p[n];
+  let p2=null, p1=Array.from({length:n+1},(_,i)=>i), cur=new Array(n+1);
+  for(let i=1;i<=m;i++){
+    cur[0]=i;
+    for(let j=1;j<=n;j++){
+      const cost=a[i-1]===b[j-1]?0:1;
+      cur[j]=Math.min(p1[j]+1, cur[j-1]+1, p1[j-1]+cost);
+      if(i>1&&j>1&&a[i-1]===b[j-2]&&a[i-2]===b[j-1]) cur[j]=Math.min(cur[j], p2[j-2]+1);
+    }
+    p2=p1; p1=cur; cur=new Array(n+1);
+  }
+  return p1[n];
 }
