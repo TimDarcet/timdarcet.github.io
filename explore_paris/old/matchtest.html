@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Paris match tester</title>
+<style>
+  body { font: 15px ui-sans-serif,system-ui,sans-serif; margin: 0; padding: 20px; background: #f4f6f9; color: #1f2a37; }
+  h1 { font-size: 18px; margin: 0 0 12px; }
+  #q { width: min(560px,90vw); font-size: 17px; padding: 10px 12px; border: 1px solid #cdd6e0; border-radius: 8px; outline: none; }
+  #q:focus { border-color: #1a73e8; box-shadow: 0 0 0 3px rgba(26,115,232,.2); }
+  .note { color: #64748b; font-size: 13px; margin: 8px 0 16px; }
+  code { background: #e6ebf1; padding: 1px 5px; border-radius: 4px; font-size: 13px; }
+  table { border-collapse: collapse; width: 100%; max-width: 900px; }
+  th,td { text-align: left; padding: 5px 10px; border-bottom: 1px solid #e2e8f0; font-variant-numeric: tabular-nums; }
+  th { color: #64748b; font-weight: 600; font-size: 13px; }
+  td.d { width: 40px; font-weight: 700; }
+  tr.ok td.d { color: #137333; } tr.near td.d { color: #b7791f; } tr.no td.d { color: #94a3b3; }
+  tr.ok { background: #e8f5ec; } tr.near { background: #fdf6e3; }
+  .core { color: #64748b; font-family: ui-monospace,monospace; font-size: 12px; }
+  #summary { margin: 12px 0; font-size: 14px; }
+  #summary b { font-family: ui-monospace,monospace; }
+</style>
+</head>
+<body>
+<h1>Paris street match tester</h1>
+<input id="q" placeholder="type a guess…" autocomplete="off" autofocus>
+<div class="note">Ranks <b id="n">…</b> streets in the whole database by edit distance (<code>lev</code>) against
+  <code>core(query)</code>. Game accepts distance ≤ 1 (green) among <i>reachable</i> streets; 2 is a near-miss (amber).
+  Here we search the <b>entire</b> database, ignoring reachability.</div>
+<div id="summary"></div>
+<table><thead><tr><th class="d">dist</th><th>street name</th><th>core(name)</th></tr></thead>
+<tbody id="rows"></tbody></table>
+
+<script src="paris.js"></script>
+<script src="match.js"></script>
+<script>
+// core()/lev()/STRIP come from match.js (shared with the game)
+const EDGES = window.PARIS.edges;
+const CORE = EDGES.map(e=>core(e.n));
+// one row per distinct name (edges split many streets into pieces sharing a name)
+const seen = new Set(); const UNIQ = [];
+EDGES.forEach((e,i)=>{ if(!seen.has(e.n)){ seen.add(e.n); UNIQ.push(i); } });
+document.getElementById("n").textContent = UNIQ.length + " names / " + EDGES.length + " edges";
+
+const q = document.getElementById("q"), rows = document.getElementById("rows"), summ = document.getElementById("summary");
+function esc(s){ return s.replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c])); }
+function run(){
+  const cq = core(q.value);
+  summ.innerHTML = q.value.trim() ? `core(query) = <b>${esc(cq)||"∅"}</b>` : "";
+  if (cq.length < 2){ rows.innerHTML = ""; return; }
+  const scored = UNIQ.map(i=>({i, d: lev(cq, CORE[i])})).sort((a,b)=> a.d-b.d || CORE[a.i].length-CORE[b.i].length);
+  rows.innerHTML = scored.slice(0,60).map(({i,d})=>{
+    const cls = d<=1 ? "ok" : d<=2 ? "near" : "no";
+    return `<tr class="${cls}"><td class="d">${d}</td><td>${esc(EDGES[i].n)}</td><td class="core">${esc(CORE[i])}</td></tr>`;
+  }).join("");
+}
+q.addEventListener("input", run);
+run();
+</script>
+</body>
+</html>

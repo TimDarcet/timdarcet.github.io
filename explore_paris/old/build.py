@@ -323,13 +323,6 @@ def main():
                 continue
             ways.append((nm, [n for n in e["nodes"] if n in coord]))
 
-    build_from_ways(ways, coord)
-
-def build_from_ways(ways, coord, arr=None, out=OUT):
-    """Shared back-end: takes named ways as (name, [nodeid,...]) plus a nodeid->(lat,lon) map from
-    ANY source (OSM or IGN BD TOPO), planarizes, extracts street edges/intersections/blocks, assigns
-    arrondissements, and writes paris.js. Node ids only need to be consistent within this call.
-    arr: optional [(label, [(lat,lon),...ring]),...]; if None, fetched from OSM via arr_polys()."""
     # planarize + merge near-coincident junctions in one step: node all crossings/T-junctions,
     # snap junctions within 6 m together (dual carriageways, staggered junctions), then re-node so
     # the result is guaranteed planar. Interior shape vertices are left untouched.
@@ -402,7 +395,7 @@ def build_from_ways(ways, coord, arr=None, out=OUT):
     faces = build_faces(edges, keep_list, outidx, inter, coord)
 
     # assign each street + block to an arrondissement (by representative point)
-    if arr is None: arr = arr_polys()
+    arr = arr_polys()
     arr_labels = [lab for lab, _ in arr]
     def which_arr(lat, lon):
         for k, (lab, ring) in enumerate(arr):
@@ -416,14 +409,14 @@ def build_from_ways(ways, coord, arr=None, out=OUT):
         f["a"] = which_arr(cx, cy)
 
     data = {"nodes": nodes, "edges": out_edges, "faces": faces, "arr": arr_labels}
-    with open(out, "w") as f:                 # JS assignment so the page works from file://
+    with open(OUT, "w") as f:                # JS assignment so the page works from file://
         f.write("window.PARIS=")
         json.dump(data, f, ensure_ascii=False, separators=(",", ":"))
     unassigned = sum(1 for e in out_edges if e["a"] < 0)
     print(f"edges(streets)={len(out_edges)}  intersections={len(nodes)}  "
           f"faces(blocks)={len(faces)}  arrondissements={len(arr_labels)}  "
           f"unassigned_edges={unassigned}  total_km={total_km:.1f}", file=sys.stderr)
-    print(f"{out} size={os.path.getsize(out)/1e6:.2f} MB", file=sys.stderr)
+    print(f"{OUT} size={os.path.getsize(OUT)/1e6:.2f} MB", file=sys.stderr)
 
 if __name__ == "__main__":
     main()
