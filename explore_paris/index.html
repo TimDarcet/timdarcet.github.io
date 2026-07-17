@@ -6,6 +6,7 @@
 <title>Paris Memory — Streets</title>
 <link rel="manifest" href="manifest.webmanifest">
 <meta name="theme-color" content="#1a73e8">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="icon.svg">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -182,6 +183,7 @@
 <div id="loading">Loading map of Paris…</div>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="paris.js"></script>
+<script src="match.js"></script>
 <script>
 const D = window.PARIS, NODES = D.nodes, EDGES = D.edges;
 const TOTAL_KM = EDGES.reduce((s,e)=>s+e.k, 0);
@@ -272,44 +274,22 @@ if (!I18N[LANG]) LANG = "en";
 const t = k => I18N[LANG][k];
 function setLang(l){ LANG=l; localStorage.setItem("paris-lang", l); applyLang(); }
 
-// ---- fuzzy matching -------------------------------------------------------
-const STRIP = new Set(("rue ruelle avenue place placette passage villa allee impasse boulevard bd square route "+
-  "chemin cite acces quai quaie cour cours pont sortie port promenade galerie sentier sente hameau esplanade "+
-  "parvis jardin jardins mail rond point carrefour pont petite petit grande grand vieille vieux "+
-  "de du des la le les l d aux au a en et sur").split(" "));
-function core(s){
-  let t = s.toLowerCase().normalize("NFD").replace(/\p{Diacritic}/gu,"").replace(/[^a-z0-9]+/g," ").trim()
-           .replace(/\bst\b/g,"saint").replace(/\bste\b/g,"sainte").split(" ");
-  while (t.length > 1 && STRIP.has(t[0])) t.shift();
-  return t.join("");
-}
-function lev(a,b){
-  const m=a.length,n=b.length; if(!m)return n; if(!n)return m;
-  let p=Array.from({length:n+1},(_,i)=>i);
-  for(let i=1;i<=m;i++){ let prev=p[0]; p[0]=i;
-    for(let j=1;j<=n;j++){ const t=p[j]; p[j]=Math.min(p[j]+1,p[j-1]+1,prev+(a[i-1]===b[j-1]?0:1)); prev=t; } }
-  return p[n];
-}
+// ---- fuzzy matching (core/lev/STRIP live in match.js) ---------------------
 const CORE = EDGES.map(e=>core(e.n));
 
 // ---- game state -----------------------------------------------------------
 const FACES = D.faces || [];
-const PLAZAS = D.plazas || [];
 const nodeEdges = NODES.map(()=>[]);            // node index -> edge indices touching it
 EDGES.forEach((e,ei)=> e.i.forEach(ni=> nodeEdges[ni].push(ei)));
 const edgeFaces = EDGES.map(()=>[]);            // edge index -> face indices it bounds
 FACES.forEach((f,fi)=> f.e.forEach(ei=> edgeFaces[ei].push(fi)));
-const edgePlazas = EDGES.map(()=>[]);           // edge index -> plaza indices it reveals
-PLAZAS.forEach((p,pi)=> p.e.forEach(ei=> edgePlazas[ei].push(pi)));
 const pairEdge = new Map();                      // "nodeA,nodeB" -> edge index (street joining exactly those two)
 EDGES.forEach((e,ei)=>{ if(e.i.length===2) pairEdge.set(e.i[0]+","+e.i[1], ei); });
 const revEdge = new Uint8Array(EDGES.length);   // revealed edges
 const revNode = new Uint8Array(NODES.length);   // revealed junctions
 const revFace = new Uint8Array(FACES.length);   // fully-enclosed blocks revealed
-const revPlaza = new Uint8Array(PLAZAS.length); // revealed plaza polygons
 const revList = [];                             // revealed edge indices, reveal order
 const faceList = [];                            // revealed face indices, for drawing
-const plazaList = [];                           // revealed plaza indices, for drawing
 const frontier = new Set();                     // revealed nodes that still have an unrevealed edge (drawn/clickable)
 let revEdgeCount = 0, revKm = 0, revArea = 0, flashEdge = -1, flashT = 0;
 let streak = 0, bestStreak = 0;                 // consecutive correct guesses
@@ -329,9 +309,40 @@ FACES.forEach(f=>{ const k=(f.a>=0&&f.a<NB)?f.a:NB; arrTotArea[k]+=f.m||0; });
 
 const SAVE_KEY = "paris-streets-progress";
 let daily = false;                               // daily-mode flag (no persistence)
+// signature of the current dataset: changes whenever edges are added/removed/renamed/reordered —
+// exactly when saved edge indices stop being valid. Lets us detect (and heal) saves after a rebuild.
+const DATA_VERSION = (()=>{ let h=EDGES.length; for(const e of EDGES) for(let i=0;i<e.n.length;i++) h=(h*31+e.n.charCodeAt(i))|0; return h; })();
+const edgePoint = ei => { const p=EDGES[ei].p[0]; return p[(p.length/2)|0]; };   // representative point
+const edgesByName = new Map();                   // name -> edge indices, for healing by identity
+EDGES.forEach((e,i)=>{ const a=edgesByName.get(e.n); if(a) a.push(i); else edgesByName.set(e.n,[i]); });
+// re-resolve a saved [name, lat, lon] to the current best-matching edge (nearest same-named segment)
+function resolveStreet(name, lat, lon){
+  const c = edgesByName.get(name); if (!c) return -1;
+  if (c.length===1) return c[0];
+  let best=-1, bd=Infinity;
+  for (const ei of c){ const p=edgePoint(ei), d=(p[0]-lat)**2+(p[1]-lon)**2; if(d<bd){bd=d;best=ei;} }
+  return best;
+}
 function save(){
   if (daily) return;
-  try { localStorage.setItem(SAVE_KEY, JSON.stringify(revList)); } catch(e){}
+  // store street IDENTITY (name + representative point), not raw indices, so a future rebuild heals
+  const s = revList.map(ei => { const p=edgePoint(ei); return [EDGES[ei].n, p[0], p[1]]; });
+  try { localStorage.setItem(SAVE_KEY, JSON.stringify({ v: DATA_VERSION, s })); } catch(e){}
+}
+function loadSave(){ try { return JSON.parse(localStorage.getItem(SAVE_KEY)); } catch(e){ return null; } }
+function saveHasProgress(x){ return Array.isArray(x) ? x.length>0 : !!(x && x.s && x.s.length); }
+// replay a save, healing across data versions. Returns the number of streets restored.
+function restoreSave(x){
+  if (Array.isArray(x)){                          // legacy bare-index array: no identity, can't heal
+    let n=0; for (const ei of x) if (ei>=0 && ei<EDGES.length && reveal(ei, true)) n++;
+    return n;
+  }
+  let n=0; for (const [nm,la,lo] of x.s){ const ei=resolveStreet(nm,la,lo); if (ei>=0 && reveal(ei,true)) n++; }
+  if (x.v !== DATA_VERSION){
+    console.warn(`Paris save healed across data change: restored ${n}/${x.s.length} streets`);
+    save();                                        // migrate to current version so next load is exact
+  }
+  return n;
 }
 
 // ---- day-streak: consecutive calendar days the game was opened -------------
@@ -354,7 +365,7 @@ function sound(km, area, big){
   try {
     AC = AC || new (window.AudioContext||window.webkitAudioContext)();
     const now = AC.currentTime;
-    // longer street -> lower, fuller note; block/plaza fill -> a bright chord
+    // longer street -> lower, fuller note; block fill -> a bright chord
     const base = 300 + 340/Math.max(0.06, km+0.3);
     // combo cadence: a hot streak nudges the pitch up a semitone per step (caps at an octave)
     const combo = Math.pow(2, Math.min(12, Math.max(0, streak-1))/12);
@@ -372,7 +383,7 @@ function sound(km, area, big){
   } catch(e){}
 }
 
-function checkFaces(ei, replay){                  // reveal any block/plaza whose trigger is now revealed
+function checkFaces(ei, replay){                  // reveal any block whose bounding streets are now all revealed
   let filled = 0;
   for (const fi of edgeFaces[ei]){
     if (revFace[fi]) continue;
@@ -382,10 +393,6 @@ function checkFaces(ei, replay){                  // reveal any block/plaza whos
       const k=(FACES[fi].a>=0&&FACES[fi].a<NB)?FACES[fi].a:NB; arrArea[k]+=m;
       if (!replay) anim.push({type:"face", fi, t:0});
     }
-  }
-  for (const pi of edgePlazas[ei]){              // a plaza clears once any same-named street is revealed
-    if (revPlaza[pi]) continue;
-    revPlaza[pi] = 1; plazaList.push(pi); if (!replay) anim.push({type:"plaza", pi, t:0});
   }
   return filled;
 }
@@ -462,18 +469,7 @@ function precompute(){
     }
     fb[fi]=[mnx,mny,mxx,mxy]; return a;
   });
-  const pb = [];
-  const pl = PLAZAS.map((pz, pi)=>{
-    let mnx=1e18,mny=1e18,mxx=-1e18,mxy=-1e18;
-    const a = new Float64Array(pz.p.length*2);
-    for (let k=0;k<pz.p.length;k++){
-      const q = map.project([pz.p[k][0], pz.p[k][1]], REFZ);
-      a[2*k]=q.x; a[2*k+1]=q.y;
-      if(q.x<mnx)mnx=q.x; if(q.x>mxx)mxx=q.x; if(q.y<mny)mny=q.y; if(q.y>mxy)mxy=q.y;
-    }
-    pb[pi]=[mnx,mny,mxx,mxy]; return a;
-  });
-  PX = { e, eb, n, f, fb, pl, pb };
+  PX = { e, eb, n, f, fb };
 }
 function updateXform(){                            // recompute affine + visible bbox for the current view (2 Leaflet calls)
   const z = map.getZoom();
@@ -666,20 +662,17 @@ function renderFog(){
   fblur.setAttribute("stdDeviation", (brush*edgeCfg.blur).toFixed(1));  // final softening
   const edgeFilter = (dragging || MOBILE) ? `blur(${(brush*0.5).toFixed(1)}px)` : "url(#fogEdge)";
 
-  // bake the filtered reveal shape ONCE (the single expensive turbulence pass) into edgeCv, in gold.
-  // Both the gilded coastline and the hole-punch are then derived from it with cheap blits.
+  // bake the raw reveal shape into edgeCv (NO filter here) with a separate fill() per polygon —
+  // batching into one path uses nonzero winding, so overlapping faces could cancel and leave a
+  // hole. The feathering filter is applied once, later, when blitting edgeCv.
   const e = ectx;
   e.setTransform(DPR,0,0,DPR,0,0); e.globalCompositeOperation="source-over"; e.clearRect(0,0,W,H);
-  e.lineCap="round"; e.lineJoin="round"; e.filter = edgeFilter;
+  e.lineCap="round"; e.lineJoin="round"; e.filter = "none";
   e.fillStyle = "rgba(214,168,74,1)"; e.strokeStyle = "rgba(214,168,74,1)"; e.lineWidth = brush;
-  e.beginPath();
-  for (const fi of faceList) if (onScreen(PX.fb[fi])) tracePolyG(e, PX.f[fi]);
-  for (const pi of plazaList) if (onScreen(PX.pb[pi])) tracePolyG(e, PX.pl[pi]);
-  e.fill();
+  for (const fi of faceList) if (onScreen(PX.fb[fi])){ e.beginPath(); tracePolyG(e, PX.f[fi]); e.fill(); }
   e.beginPath();
   for (const ei of revList) if (onScreen(PX.eb[ei])) strokePathsG(e, ei);
   e.stroke();
-  e.filter = "none";
 
   // 2. gilded coastline: the baked shape, spread outward by a blur -> soft gold halo around the hole
   g.save();
@@ -688,9 +681,12 @@ function renderFog(){
   g.drawImage(edgeCv, 0, 0, W, H);
   g.filter = "none"; g.globalAlpha = 1; g.restore();
 
-  // 3. punch the holes out of the fog (destination-out uses the baked shape's alpha)
+  // 3. punch the holes out of the fog — feather the whole shape in ONE filtered blit
+  g.save();
   g.globalCompositeOperation = "destination-out";
+  g.filter = edgeFilter;
   g.drawImage(edgeCv, 0, 0, W, H);
+  g.filter = "none"; g.restore();
   g.globalCompositeOperation = "source-over";
 
   // 4. faint warm tint on cleared blocks + revealed streets as ink
@@ -718,7 +714,7 @@ function draw(){
   ctx.setTransform(DPR,0,0,DPR,0,0);
   ctx.lineCap = "round"; ctx.lineJoin = "round";
 
-  // 4. reveal animations: streets draw-on in gold, blocks/plazas pop with a shimmer
+  // 4. reveal animations: streets draw-on in gold, blocks pop with a shimmer
   for (const A of anim){
     if (A.type === "edge"){
       const e = A.ei; const g = 1 - (1-A.t)*(1-A.t);       // ease-out
@@ -731,11 +727,9 @@ function draw(){
         for (let k=1;k<=upto && k<npt;k++) ctx.lineTo(a[2*k]*S+Tx, a[2*k+1]*S+Ty);
       }
       ctx.stroke(); ctx.restore();
-    } else if (A.type === "face" || A.type === "plaza"){
-      const poly = A.type==="face" ? PX.f[A.fi] : PX.pl[A.pi];
-      const bb   = A.type==="face" ? PX.fb[A.fi] : PX.pb[A.pi];
+    } else if (A.type === "face"){
+      const poly = PX.f[A.fi], bb = PX.fb[A.fi];
       if (!onScreen(bb)) continue;
-      const cx=(bb[0]+bb[2])/2*S+Tx, cy=(bb[1]+bb[3])/2*S+Ty;
       ctx.save();
       ctx.beginPath(); tracePoly(poly);
       ctx.fillStyle = `rgba(255,201,92,${0.5*(1-A.t)})`; ctx.fill();       // gold shimmer fading out
@@ -953,36 +947,40 @@ function submitGuess(){
     // reveal EVERY revealable street matching this name, chaining: each reveal can extend the
     // frontier and make more same-named streets reachable (e.g. Rue de Clichy -> Place de Clichy).
     const bc = CORE[best];
-    let revealed = 0, found = true;
+    const byName = new Map();      // revealed street name -> segment count (distinct names share a core key)
+    let found = true;
     while (found){
       found = false;
       // snapshot frontier: reveal() mutates it, so don't iterate it live
       const cands = new Set();
       for (const ni of frontier) for (const ei of nodeEdges[ni]) if (!revEdge[ei] && CORE[ei]===bc) cands.add(ei);
-      for (const ei of cands){ if (!revEdge[ei] && reveal(ei)){ revealed++; growViewToEdge(ei); found = true; } }
+      for (const ei of cands){ if (!revEdge[ei] && reveal(ei)){ byName.set(EDGES[ei].n, (byName.get(EDGES[ei].n)||0)+1); growViewToEdge(ei); found = true; } }
     }
     streak++; bestStreak=Math.max(bestStreak,streak);
     updateStats(); flourishStreak(); checkMilestones(); draw();
-    let m = t("ok")(EDGES[best].n);
-    if (revealed>1) m += ` ×${revealed}`;
+    // one entry per distinct name, each keeping its own ×N for multi-segment streets
+    let m = "✓ " + [...byName].map(([nm,c]) => nm + (c>1 ? ` ×${c}` : "")).join(" · ");
     if (streak>=5 && streak%5===0){ m += `  🔥 ${streak}!`; toast(`🔥 ${streak} ${t("streak")}!`); }
     flash(m, true);
   } else {
     streak = 0; updateStats();
-    // near-miss within 2 edits: nudge without revealing the (still-hidden) street name
-    if (best>=0 && bestD<=2){ flash(t("oneOff"), false); }
-    else {
-      // is it a real Paris street, just not reachable yet? If so, faintly flash it under the fog
-      // (only where it's on-screen — no panning) so you can spot it near your explored area.
-      const matches = [];
-      for (let i=0;i<CORE.length;i++) if (CORE[i]===q && !revEdge[i]) matches.push(i);
-      if (matches.length){
-        for (const ei of matches) anim.push({type:"locate", ei, t:0});
-        if (!animRunning){ animRunning = true; requestAnimationFrame(animLoop); }
-        flash(t("notAdjacent"), false);
-      } else {
-        flash(t("noMatch"), false);
-      }
+    // glow every street on-screen whose name matches the guess, revealed or not, so you can always
+    // spot what you meant under the fog (no panning — only segments already on-screen).
+    const glow = ei => { anim.push({type:"locate", ei, t:0}); };
+    const already = [], hidden = [];
+    for (let i=0;i<CORE.length;i++) if (CORE[i]===q){ (revEdge[i]?already:hidden).push(i); }
+    for (const ei of already.concat(hidden)) glow(ei);
+    if (already.length || hidden.length){
+      if (!animRunning){ animRunning = true; requestAnimationFrame(animLoop); }
+    }
+    if (already.length && !hidden.length){       // you already revealed this exact street
+      flash(t("alreadyThere"), true);
+    } else if (best>=0 && bestD<=2){             // near-miss on a reachable street: nudge, don't spoil
+      flash(t("oneOff"), false);
+    } else if (hidden.length){                   // real street, just not touching your area yet
+      flash(t("notAdjacent"), false);
+    } else {
+      flash(t("noMatch"), false);
     }
   }
 }
@@ -1160,10 +1158,9 @@ function begin(lat, lon){
   window.addEventListener("orientationchange", ()=> setTimeout(onViewport, 250));
   if (window.visualViewport) window.visualViewport.addEventListener("resize", onViewport);
 
-  let saved = null;
-  try { saved = JSON.parse(localStorage.getItem(SAVE_KEY)); } catch(e){}
-  if (Array.isArray(saved) && saved.length){
-    for (const ei of saved) if (ei>=0 && ei<EDGES.length) reveal(ei, true);   // replay: no flash/save spam
+  let saved = loadSave();
+  if (saveHasProgress(saved)){
+    restoreSave(saved);                            // replay + heal across data changes; no flash/save spam
   } else if (lat!=null){
     reveal(nearestEdge(lat, lon));
   }
@@ -1255,8 +1252,8 @@ function startDaily(){
   closeModal();
   daily = true; streak=0; bestStreak=0;
   // wipe current state
-  revEdge.fill(0); revNode.fill(0); revFace.fill(0); revPlaza.fill(0);
-  revList.length=0; faceList.length=0; plazaList.length=0; anim.length=0; frontier.clear();
+  revEdge.fill(0); revNode.fill(0); revFace.fill(0);
+  revList.length=0; faceList.length=0; anim.length=0; frontier.clear();
   revEdgeCount=0; revKm=0; revArea=0; arrKm.fill(0); arrArea.fill(0); arrCntN.fill(0);
   lastPctMilestone=0; celebratedArr.clear(); disp.streets=0; disp.km=0; disp.area=0;
   document.getElementById("arr").style.display="none";
@@ -1356,8 +1353,7 @@ function boot(){
   }
   const wantDaily = location.hash === "#daily";
   const firstTime = !localStorage.getItem("paris-seen-rules");
-  let saved = null;
-  try { saved = JSON.parse(localStorage.getItem(SAVE_KEY)); } catch(e){}
+  let saved = loadSave();
   const inParis = (la,lo)=> la>48.80 && la<48.91 && lo>2.21 && lo<2.48;   // Paris commune bbox (+margin)
 
   // run the onboarding chain: (optional rules) then (optional start-point chooser)
@@ -1368,7 +1364,7 @@ function boot(){
     else chooser();
   };
 
-  if (Array.isArray(saved) && saved.length){ begin(48.8566, 2.3522); onboard(false); return; }  // have progress
+  if (saveHasProgress(saved)){ begin(48.8566, 2.3522); onboard(false); return; }  // have progress
   if (wantDaily){ begin(null, null); startDaily(); return; }              // daily seeds its own start
   if (navigator.geolocation)
     navigator.geolocation.getCurrentPosition(

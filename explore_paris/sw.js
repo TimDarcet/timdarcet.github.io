@@ -1,9 +1,10 @@
 // Service worker: offline app shell + runtime tile cache. Bump CACHE to invalidate on deploy.
-const CACHE = "paris-v1";
+const CACHE = "paris-v2";
 const SHELL = [
   "./",
   "./index.html",
   "./paris.js",
+  "./match.js",
   "./icon.svg",
   "./manifest.webmanifest",
   "https://unpkg.com/leaflet@1.9.4/dist/leaflet.js",

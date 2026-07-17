@@ -2,13 +2,12 @@
 """Fetch Paris named streets from OpenStreetMap (Overpass) and emit paris.json.
 Streets = edges (ways merged by name + connectivity). Intersections = nodes shared
 by two different streets. Only the largest connected component is kept so 100% is reachable."""
-import json, math, os, sys, re, urllib.request, urllib.parse, collections
+import json, math, os, sys, re, urllib.request, urllib.parse, collections, unicodedata
 sys.setrecursionlimit(100000)
 
 AREA = 3600007444  # Paris commune boundary relation 7444
 RAW = "paris_raw.json"
 ARR_RAW = "arr_raw.json"
-PLAZA_RAW = "plaza_raw.json"
 OUT = "paris.js"
 LAT0 = math.radians(48.86); COSLAT = math.cos(LAT0)
 EXCLUDE_HW = {"steps", "elevator", "construction", "proposed", "platform", "bus_stop",
@@ -36,20 +35,6 @@ def fetch_arr():
                                  headers={"User-Agent": "paris-streets-game/1.0"})
     d = json.loads(urllib.request.urlopen(req, timeout=120).read())
     json.dump(d, open(ARR_RAW, "w"))
-    return d
-
-def fetch_plaza():
-    if os.path.exists(PLAZA_RAW):
-        return json.load(open(PLAZA_RAW))
-    q = (f'[out:json][timeout:120];area({AREA})->.a;'
-         '(way(area.a)["place"="square"]["name"];'
-         'way(area.a)["highway"="pedestrian"]["area"="yes"]["name"];);out geom;')
-    print("querying plazas...", file=sys.stderr)
-    req = urllib.request.Request("https://overpass-api.de/api/interpreter",
-                                 data=("data=" + urllib.parse.quote(q)).encode(),
-                                 headers={"User-Agent": "paris-streets-game/1.0"})
-    d = json.loads(urllib.request.urlopen(req, timeout=120).read())
-    json.dump(d, open(PLAZA_RAW, "w"))
     return d
 
 def arr_polys():
@@ -137,7 +122,6 @@ def build_faces(edges, keep_list, outidx, inter, coord):
     out_faces = []
     for poly in polys:
         a = poly.area
-        if a < 300 or a > 6e5: continue                               # slivers / huge regions
         ring = poly.exterior
         es = []
         for q in tree.query(ring):                                    # streets whose bbox meets the block
@@ -151,54 +135,198 @@ def build_faces(edges, keep_list, outidx, inter, coord):
                           "m": round(a)})    # block area in m^2
     return out_faces
 
+def planarize(ways, coord, merge_m=6.0):
+    """Turn the raw street graph into a planar one AND merge near-coincident junctions in a single
+    step. Sequence: node the whole network (unary_union) so every crossing/T-junction is split and
+    shared; snap junction nodes within merge_m metres to their cluster centroid (dual carriageways,
+    staggered junctions -> one visual crossing); then re-node, so relocating a junction can never
+    leave a crossing unsplit. The result is guaranteed planar. Only junction endpoints move —
+    interior shape vertices pass through untouched, so street curves stay intact. Returns
+    (ways2, coord2) as (name, [nodeid,...]) on synthetic integer ids."""
+    from shapely.geometry import LineString
+    from shapely.ops import unary_union
+    from shapely.strtree import STRtree
+    M = 111320.0
+    def xy(la, lo): return (lo * COSLAT * M, la * M)
+    def ll(x, y): return (y / M, x / (COSLAT * M))
+    def key(x, y): return (round(x, 3), round(y, 3))              # mm snap: absorbs float noise only
+
+    def node_name(lines, names):                                  # planar-node, tag each piece with a street name
+        tree = STRtree(lines)
+        u = unary_union(lines)
+        pcs = list(u.geoms) if u.geom_type == "MultiLineString" else [u]
+        out = []
+        for pc in pcs:
+            mid = pc.interpolate(0.5, normalized=True); nm = None; best = 0.6
+            for q in tree.query(pc):
+                d = lines[q].distance(mid)
+                if d < best: best = d; nm = names[q]
+            if nm is not None and len(pc.coords) >= 2: out.append((nm, list(pc.coords)))
+        return out
+
+    lines = [LineString([xy(*coord[n]) for n in nds]) for nm, nds in ways if len(nds) >= 2]
+    names = [nm for nm, nds in ways if len(nds) >= 2]
+    pieces = node_name(lines, names)                              # planar pieces (name, [(x,y),...])
+
+    # junctions = piece endpoints touched by >=2 distinct street names
+    epn = collections.defaultdict(set)
+    for nm, cs in pieces:
+        epn[key(*cs[0])].add(nm); epn[key(*cs[-1])].add(nm)
+    junc = [k for k, nms in epn.items() if len(nms) >= 2]
+
+    # union-find merge junctions within merge_m (true distance) -> cluster centroid
+    parent = {k: k for k in junc}
+    def find(a):
+        while parent[a] != a: parent[a] = parent[parent[a]]; a = parent[a]
+        return a
+    grid = collections.defaultdict(list)
+    def gk(k): return (int(k[0] / merge_m), int(k[1] / merge_m))
+    for k in junc: grid[gk(k)].append(k)
+    for k in junc:
+        gi, gj = gk(k)
+        for di in (-1, 0, 1):
+            for dj in (-1, 0, 1):
+                for m in grid.get((gi + di, gj + dj), []):
+                    if m > k and math.hypot(k[0]-m[0], k[1]-m[1]) <= merge_m: parent[find(k)] = find(m)
+    cl = collections.defaultdict(list)
+    for k in junc: cl[find(k)].append(k)
+    moved = {}                                                    # junction point -> merged centroid
+    for ks in cl.values():
+        cx = sum(p[0] for p in ks) / len(ks); cy = sum(p[1] for p in ks) / len(ks)
+        for k in ks: moved[k] = (cx, cy)
+
+    # relocate merged endpoints (interiors untouched), then re-node -> guaranteed planar
+    lines2, names2 = [], []
+    for nm, cs in pieces:
+        cs[0] = moved.get(key(*cs[0]), cs[0]); cs[-1] = moved.get(key(*cs[-1]), cs[-1])
+        lines2.append(LineString(cs)); names2.append(nm)
+    pieces2 = node_name(lines2, names2)
+
+    # connect distinct-named streets that pass within connect_m of each other but never touch (OSM
+    # left them unnoded): give each such NAME pair ONE shared junction at their closest approach.
+    # This makes a near-touching street reachable/guessable without welding the two together along
+    # their length (parallel streets get a single junction, not a seam).
+    from shapely.geometry import Point
+    from shapely.ops import nearest_points
+    connect_m = 3.0
+    byname = collections.defaultdict(list)                        # name -> piece indices
+    for idx, (nm, cs) in enumerate(pieces2): byname[nm].append(idx)
+    gnames = list(byname)
+    ggeoms = [unary_union([LineString(pieces2[i][1]) for i in byname[nm]]) for nm in gnames]
+    gtree = STRtree(ggeoms)
+    inserts = collections.defaultdict(list)                       # piece idx -> [junction point,...]
+    def add_insert(nm, p, J):                                     # queue J onto the piece of nm nearest p
+        best, bd = None, 1e9
+        for i in byname[nm]:
+            d = LineString(pieces2[i][1]).distance(Point(p))
+            if d < bd: bd, best = d, i
+        inserts[best].append(J)
+    for a in range(len(gnames)):
+        ga = ggeoms[a]
+        for b in gtree.query(ga.buffer(connect_m)):
+            if b <= a or ga.distance(ggeoms[b]) >= connect_m or ga.intersects(ggeoms[b]): continue
+            pa, pb = nearest_points(ga, ggeoms[b])
+            J = ((pa.x + pb.x) / 2, (pa.y + pb.y) / 2)           # single junction between the pair
+            add_insert(gnames[a], (pa.x, pa.y), J); add_insert(gnames[b], (pb.x, pb.y), J)
+
+    def insert_pts(cs, pts):                                      # splice each J into cs at its projected spot
+        for J in pts:
+            ln = LineString(cs); d = ln.project(Point(J)); cum = 0; done = False
+            for i in range(len(cs) - 1):
+                seg = math.hypot(cs[i+1][0]-cs[i][0], cs[i+1][1]-cs[i][1])
+                if cum + seg >= d: cs = cs[:i+1] + [J] + cs[i+1:]; done = True; break
+                cum += seg
+            if not done: cs = cs[:-1] + [J, cs[-1]]
+        return cs
+    lines3, names3 = [], []
+    for idx, (nm, cs) in enumerate(pieces2):
+        cs = insert_pts(cs, inserts[idx]) if idx in inserts else cs
+        lines3.append(LineString(cs)); names3.append(nm)
+    pieces3 = node_name(lines3, names3)                           # re-node: pairs now share their junction
+
+    # assign synthetic node ids; shared nodes coincide exactly after noding so exact keying is safe
+    coord2 = {}; idof = {}
+    def nid(x, y):
+        k = key(x, y); i = idof.get(k)
+        if i is None: i = idof[k] = len(idof); coord2[i] = ll(x, y)
+        return i
+    out = []
+    for nm, cs in pieces3:
+        nds = [nid(x, y) for x, y in cs]
+        nds = [nds[i] for i in range(len(nds)) if i == 0 or nds[i] != nds[i-1]]
+        if len(nds) >= 2: out.append((nm, nds))
+    return out, coord2
+
+def dl1(a, b):
+    """Damerau-Levenshtein (adjacent transpositions cost 1), short-circuited: returns True iff
+    distance <= 1. Used to spot cycleway names that are just typos of an existing street."""
+    m, n = len(a), len(b)
+    if abs(m - n) > 1: return False
+    D = [[0] * (n + 1) for _ in range(m + 1)]
+    for i in range(m + 1): D[i][0] = i
+    for j in range(n + 1): D[0][j] = j
+    for i in range(1, m + 1):
+        for j in range(1, n + 1):
+            D[i][j] = min(D[i-1][j]+1, D[i][j-1]+1, D[i-1][j-1]+(a[i-1] != b[j-1]))
+            if i > 1 and j > 1 and a[i-1] == b[j-2] and a[i-2] == b[j-1]:
+                D[i][j] = min(D[i][j], D[i-2][j-2] + 1)
+    return D[m][n] <= 1
+
+# named cycleways to keep even though highway=cycleway: real public ways with no road twin.
+# "La Coulée Verte René-Dumont" (the Promenade Plantée) has no street prefix so the rule below
+# misses it; whitelist it explicitly.
+CYCLE_KEEP = {"La Coulée Verte René-Dumont"}
+CYCLE_PREFIX = ("Rue ", "Avenue ", "Boulevard ", "Place ", "Allée ", "Mail ", "Promenade ",
+                "Tunnel ", "Cours ", "Quai ", "Square ", "Impasse ", "Passage ", "Villa ",
+                "Carrefour ", "Sentier ", "Esplanade ")
+
+def keep_cycleway(nm, road_names, road_norms):
+    """Decide whether a highway=cycleway way named nm is worth keeping. Kept when it is explicitly
+    whitelisted or looks like a genuine standalone street (street-type prefix and not a
+    near-duplicate/typo of an existing road name). We deliberately do NOT keep every cycleway that
+    merely shares a road's name — those are mostly separated cycle tracks running parallel to the
+    road for kilometres (Rivoli, Voltaire, ...), which would duplicate geometry and spawn slivers."""
+    if nm in CYCLE_KEEP: return True
+    if nm in road_names: return False             # same name as a real road -> parallel track, skip
+    if not nm.startswith(CYCLE_PREFIX): return False
+    if nm.startswith("Voie ") and "/" in nm: return False
+    n = norm_name(nm)
+    return not any(dl1(n, rn) for rn in road_norms)
+
+def norm_name(s):
+    s = unicodedata.normalize("NFD", s.lower())
+    return "".join(c for c in s if not unicodedata.combining(c) and c.isalnum())
+
 def main():
     d = fetch()
     coord = {}; ways = []
+    def base_ok(hw, nm, t):                       # shared non-highway filters
+        if not nm: return False
+        if t.get("footway") in {"sidewalk", "crossing", "traffic_island", "link"}: return False
+        if nm.startswith("Voie ") and "/" in nm: return False   # internal Paris code names
+        if "parking" in nm.lower(): return False                # parking ramps/aisles, not real streets
+        return True
+    # first pass: names of kept non-cycleway roads (for the cycleway continue/near-dup test)
+    road_names = set()
+    for e in d["elements"]:
+        if e["type"] == "way":
+            t = e["tags"]; hw = t.get("highway"); nm = t.get("name", "")
+            if hw not in EXCLUDE_HW and base_ok(hw, nm, t): road_names.add(nm)
+    road_norms = {norm_name(nm) for nm in road_names}
     for e in d["elements"]:
         if e["type"] == "node":
             coord[e["id"]] = (e["lat"], e["lon"])
         elif e["type"] == "way":
-            hw = e["tags"].get("highway"); nm = e["tags"].get("name", "")
-            if hw in EXCLUDE_HW or not nm: continue
-            if e["tags"].get("footway") in {"sidewalk", "crossing", "traffic_island", "link"}: continue
-            if nm.startswith("Voie ") and "/" in nm: continue  # internal Paris code names
+            t = e["tags"]; hw = t.get("highway"); nm = t.get("name", "")
+            if not base_ok(hw, nm, t): continue
+            if hw in EXCLUDE_HW and not (hw == "cycleway" and keep_cycleway(nm, road_names, road_norms)):
+                continue
             ways.append((nm, [n for n in e["nodes"] if n in coord]))
 
-    # merge near-coincident INTERSECTION nodes (dual carriageways, staggered junctions) so a
-    # single visual crossing is one node. Only junctions are merged — never interior shape
-    # vertices — so street curves stay intact. Snap junctions within MERGE_M metres together.
-    MERGE_M = 6.0
-    nameuse = collections.defaultdict(set)          # node -> set of street names touching it
-    for nm, nds in ways:
-        for n in nds: nameuse[n].add(nm)
-    junctions = [n for n, names in nameuse.items() if len(names) >= 2]
-    parent = {n: n for n in junctions}
-    def find(x):
-        while parent[x] != x: parent[x] = parent[parent[x]]; x = parent[x]
-        return x
-    cell = MERGE_M / 111320.0
-    grid = collections.defaultdict(list)
-    def gk(n): la, lo = coord[n]; return (int(la / cell), int(lo * COSLAT / cell))
-    for n in junctions: grid[gk(n)].append(n)
-    for n in junctions:
-        gi, gj = gk(n)
-        for di in (-1, 0, 1):
-            for dj in (-1, 0, 1):
-                for m in grid.get((gi + di, gj + dj), []):
-                    if m <= n: continue
-                    if haversine(coord[n], coord[m]) <= MERGE_M: parent[find(n)] = find(m)
-    # representative coord = mean of each merged junction cluster; remap only those nodes
-    groups = collections.defaultdict(list)
-    for n in junctions: groups[find(n)].append(n)
-    for r, ns in groups.items():
-        coord[r] = (sum(coord[x][0] for x in ns) / len(ns), sum(coord[x][1] for x in ns) / len(ns))
-    def R(n): return find(n) if n in parent else n   # interior vertices pass through untouched
-    merged_ways = []
-    for nm, nds in ways:
-        m = [R(n) for n in nds]
-        m = [m[i] for i in range(len(m)) if i == 0 or m[i] != m[i - 1]]  # collapse consecutive dups
-        merged_ways.append((nm, m))
-    ways = merged_ways
+    # planarize + merge near-coincident junctions in one step: node all crossings/T-junctions,
+    # snap junctions within 6 m together (dual carriageways, staggered junctions), then re-node so
+    # the result is guaranteed planar. Interior shape vertices are left untouched.
+    ways, coord = planarize(ways, coord)
 
     # group ways by name, split each group into connected components (shared node ids) -> street edges
     edges = []  # each: {name, ways:[[nodeid,...]], nodeset}
@@ -280,26 +408,13 @@ def main():
         cx = sum(p[0] for p in f["p"]) / len(f["p"]); cy = sum(p[1] for p in f["p"]) / len(f["p"])
         f["a"] = which_arr(cx, cy)
 
-    # plazas: named square polygons that reveal when a street of the same name is revealed
-    name_edges = collections.defaultdict(list)
-    for k, e in enumerate(out_edges): name_edges[e["n"]].append(k)
-    plazas = []
-    for w in fetch_plaza()["elements"]:
-        if w["type"] != "way" or "geometry" not in w: continue
-        nm = w["tags"].get("name", ""); g = w["geometry"]
-        if nm not in name_edges or len(g) < 4 or g[0] != g[-1]: continue
-        ring = dp_simplify([(p["lat"], p["lon"]) for p in g], 8e-6)
-        if len(ring) < 4: continue
-        plazas.append({"e": sorted(name_edges[nm]),
-                       "p": [[round(la, 5), round(lo, 5)] for la, lo in ring[:-1]]})
-
-    data = {"nodes": nodes, "edges": out_edges, "faces": faces, "arr": arr_labels, "plazas": plazas}
+    data = {"nodes": nodes, "edges": out_edges, "faces": faces, "arr": arr_labels}
     with open(OUT, "w") as f:                # JS assignment so the page works from file://
         f.write("window.PARIS=")
         json.dump(data, f, ensure_ascii=False, separators=(",", ":"))
     unassigned = sum(1 for e in out_edges if e["a"] < 0)
     print(f"edges(streets)={len(out_edges)}  intersections={len(nodes)}  "
-          f"faces(blocks)={len(faces)}  arrondissements={len(arr_labels)}  plazas={len(plazas)}  "
+          f"faces(blocks)={len(faces)}  arrondissements={len(arr_labels)}  "
           f"unassigned_edges={unassigned}  total_km={total_km:.1f}", file=sys.stderr)
     print(f"{OUT} size={os.path.getsize(OUT)/1e6:.2f} MB", file=sys.stderr)
 
