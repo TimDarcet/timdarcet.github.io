@@ -1,10 +1,13 @@
 // Fuzzy street-name matching, shared by index.html (the game) and matchtest.html (the tester).
 // core(name) -> a comparison key: lowercased, de-accented, numbers spelled out in French,
 // punctuation dropped, leading generic words (rue/place/de/…) stripped. lev() is edit distance.
-const STRIP = new Set(("rue ruelle avenue place placette passage villa allee impasse boulevard bd square route "+
-  "chemin cite acces quai quaie cour cours pont sortie port promenade galerie sentier sente hameau esplanade "+
-  "parvis jardin jardins mail rond point carrefour pont voie "+
-  "de du des la le les l d aux au a en et sur").split(" "));
+// leading prefixes stripped from a street name before comparison. TYPE = the street-type word
+// (at most ONE is stripped, so "Place du Pont Neuf" keeps "Pont"); CONN = articles/connectors
+// (any number, e.g. "de la"). core() peels connectors freely but only one type.
+const TYPE = new Set(("rue ruelle avenue place placette passage villa allee impasse boulevard bd square "+
+  "route chemin cite acces quai quaie cour cours pont sortie port promenade galerie sentier sente hameau "+
+  "esplanade parvis jardin jardins mail carrefour voie").split(" ").concat(["rond point"]));
+const CONN = new Set("de du des la le les l d aux au a en et sur".split(" "));
 const U=["","un","deux","trois","quatre","cinq","six","sept","huit","neuf","dix","onze","douze","treize",
   "quatorze","quinze","seize","dix-sept","dix-huit","dix-neuf"];
 function b100(n){ if(n<20)return U[n]; const t=(n/10)|0,u=n%10;
@@ -41,7 +44,10 @@ function core(s){
   x = deRoman(x).toLowerCase();                  // roman on de-accented text so \b is reliable
   let t = spellNums(x).replace(/[^a-z0-9]+/g," ").trim()
            .replace(/\bst\b/g,"saint").replace(/\bste\b/g,"sainte").split(" ");
-  while (t.length > 1 && STRIP.has(t[0])) t.shift();
+  while (t.length > 1 && CONN.has(t[0])) t.shift();           // any number of leading connectors
+  if (t.length > 2 && TYPE.has(t[0]+" "+t[1])) t.splice(0,2); // one street-type word (2-token forms
+  else if (t.length > 1 && TYPE.has(t[0])) t.shift();          // like "rond point" checked first)
+  while (t.length > 1 && CONN.has(t[0])) t.shift();           // and the connectors after it ("de la")
   return t.join("");
 }
 // Damerau-Levenshtein (OSA): like edit distance but an adjacent transposition (e.g. Cartoux/Catroux)

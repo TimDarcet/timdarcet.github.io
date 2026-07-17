@@ -948,13 +948,14 @@ function submitGuess(){
   }
   const tol = 1;                               // accept the exact name plus or minus one typo
   if (best>=0 && bestD<=tol){
-    // reveal EVERY street matching this name anywhere on the map, not just sections touching the
-    // frontier — one guess of "Boulevard Henri IV" reveals all its disconnected stretches at once.
-    const bc = CORE[best];
-    const byName = new Map();      // revealed street name -> segment count (distinct names share a core key)
+    // reveal EVERY section sharing the matched street's EXACT name anywhere on the map (so
+    // "Boulevard Henri IV" reveals all its stretches) — but NOT other streets that merely share a
+    // core key, e.g. Boulevard Malesherbes must not drag in Cité Malesherbes.
+    const bn = EDGES[best].n;
+    const byName = new Map();      // revealed street name -> segment count
     let bounds = null;             // union of all revealed sections, to grow the view once at the end
     for (let ei=0; ei<EDGES.length; ei++){
-      if (!revEdge[ei] && CORE[ei]===bc && reveal(ei)){
+      if (!revEdge[ei] && EDGES[ei].n===bn && reveal(ei)){
         byName.set(EDGES[ei].n, (byName.get(EDGES[ei].n)||0)+1);
         bounds = bounds ? bounds.extend(edgeBounds(ei)) : edgeBounds(ei);
       }
