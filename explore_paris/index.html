@@ -79,6 +79,30 @@
   #arr .abar span { display: block; height: 100%; background: linear-gradient(90deg,#1a73e8,#4aa3ff); border-radius: 4px; }
   #arr .ap { width: 30px; text-align: right; color: #eaf2ff; }
   #arrBtn.on { background: #1a73e8; color: #fff; border-color: #1a73e8; }
+  /* room panel: always-visible code + peers + a box to merge another room. Bottom-right, above the HUD */
+  #room { position: fixed; right: 12px; bottom: calc(112px + env(safe-area-inset-bottom)); z-index: 555; width: 190px;
+          background: rgba(20,28,40,.9); color: #eaf2ff; border: 1px solid #3a4a60; border-radius: 10px;
+          padding: 8px 10px; font-size: 12px; font-family: ui-sans-serif, system-ui; box-shadow: 0 8px 24px rgba(0,0,0,.4); }
+  #room .rhdr { display: flex; align-items: center; gap: 6px; }
+  #room .code { font-family: ui-monospace, monospace; font-weight: 700; font-size: 13px; letter-spacing: .5px;
+                cursor: pointer; color: #bcd6ff; }
+  #room .code:hover { color: #fff; }
+  #room .rcount { margin-left: auto; color: #9fb2c9; font-variant-numeric: tabular-nums; }
+  #room .me { display: flex; align-items: center; gap: 6px; margin-top: 6px; }
+  #room .me i { width: 10px; height: 10px; border-radius: 50%; flex: none; box-shadow: 0 0 0 1px rgba(255,255,255,.25); }
+  #room .me input { flex: 1; min-width: 0; background: rgba(255,255,255,.08); border: 1px solid transparent;
+                    border-radius: 6px; padding: 4px 6px; font: inherit; color: #eaf2ff; outline: none; }
+  #room .me input:hover { border-color: #3a4a60; }
+  #room .me input:focus { background: #fff; color: #1f2a37; border-color: #1a73e8; }
+  #room .peers { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+  #room .peers i { width: 10px; height: 10px; border-radius: 50%; display: inline-block; box-shadow: 0 0 0 1px rgba(255,255,255,.25); }
+  #room .merge { display: flex; gap: 4px; margin-top: 8px; }
+  #room .merge input { flex: 1; min-width: 0; background: #fff; border: 1px solid #cdd6e0; border-radius: 7px;
+                       padding: 6px 8px; font-size: 12px; color: #1f2a37; outline: none; }
+  #room .merge input:focus { border-color: #1a73e8; }
+  #room .merge button { background: #1a73e8; color: #fff; border: none; border-radius: 7px; padding: 0 10px;
+                        font-size: 12px; font-weight: 700; cursor: pointer; }
+  #room .merge button:hover { background: #1560c9; }
   #title b { font-weight: 700; letter-spacing: 2px; font-family: "Fraunces", Georgia, serif; }
   #toast { position: fixed; left: 50%; top: 64px; transform: translateX(-50%) translateY(-8px); z-index: 620;
            opacity: 0; transition: opacity .3s, transform .3s; pointer-events: none; white-space: nowrap;
@@ -163,6 +187,7 @@
   <button id="fbBtn" class="chip" title="Feedback">✎</button>
 </div>
 <div id="timer"></div>
+<div id="room"></div>
 <div id="debug"></div>
 <div id="edgepanel"></div>
 <div id="arr"></div>
@@ -184,6 +209,7 @@
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="paris.js"></script>
 <script src="match.js"></script>
+<script src="sync.js"></script>
 <script>
 const D = window.PARIS, NODES = D.nodes, EDGES = D.edges;
 const TOTAL_KM = EDGES.reduce((s,e)=>s+e.k, 0);
@@ -227,6 +253,8 @@ const I18N = {
       ["Panthéon", 48.8462, 2.3464], ["République", 48.8675, 2.3636],
     ],
     startGo: "Start here",
+    copyInvite: "Copy invite link", mergeRoom: "Join this room", mergePlaceholder: "Merge a room…", yourName: "Your name",
+    joinFailed: "Couldn't join — check your connection", found: (who,n)=>`${who} found ${n}`, youJoined: c=>`Joined room ${c}`,
     credit: `Inspired by <a href="https://memory.pour.paris" target="_blank" rel="noopener">Paris de tête</a> by Benjamin Tran Dinh.`,
   },
   fr: {
@@ -266,6 +294,8 @@ const I18N = {
       ["Panthéon", 48.8462, 2.3464], ["République", 48.8675, 2.3636],
     ],
     startGo: "Commencer ici",
+    copyInvite: "Copier le lien d'invitation", mergeRoom: "Rejoindre ce salon", mergePlaceholder: "Fusionner un salon…", yourName: "Votre nom",
+    joinFailed: "Connexion impossible — vérifiez votre réseau", found: (who,n)=>`${who} a trouvé ${n}`, youJoined: c=>`Salon ${c} rejoint`,
     credit: `Inspiré par <a href="https://memory.pour.paris" target="_blank" rel="noopener">Paris de tête</a> de Benjamin Tran Dinh.`,
   },
 };
@@ -294,6 +324,9 @@ const frontier = new Set();                     // revealed nodes that still hav
 let revEdgeCount = 0, revKm = 0, revArea = 0, flashEdge = -1, flashT = 0;
 let streak = 0, bestStreak = 0;                 // consecutive correct guesses
 const anim = [];                                // active reveal draw-on / fill animations
+// multiplayer: per-edge finder colour (null = solo/own default ink), remote-apply guard, room roster
+const edgeColor = new Array(EDGES.length).fill(null);
+let applyingRemote = false, roster = {}, remoteColor = null;
 
 // ---- totals + progress, overall and per arrondissement --------------------
 const ARR = D.arr || [];
@@ -410,6 +443,11 @@ function reveal(ei, replay){
   }
   const filled = checkFaces(ei, replay);
   fogDirty = true;                                 // geometry changed -> rebuild cached fog
+  // multiplayer: broadcast our own live discoveries; remote reveals are tinted by their finder
+  if (Sync.code && !daily){
+    if (applyingRemote){ edgeColor[ei] = remoteColor; }
+    else if (!replay){ const p = edgePoint(ei); Sync.pushOne(EDGES[ei].n, p[0], p[1]); }
+  }
   if (!replay){
     flashEdge = ei; flashT = 1; save();
     anim.push({type:"edge", ei, t:0});           // draw-on animation
@@ -698,7 +736,8 @@ function renderFog(){
   for (const ei of revList){
     if (!onScreen(PX.eb[ei])) continue;
     const w = brush * 0.22 * (0.8 + Math.min(1.1, EDGES[ei].k*0.6));   // ground-proportional ink width
-    g.strokeStyle = "rgba(40,54,74,0.72)"; g.lineWidth = Math.max(0.8, w);
+    g.strokeStyle = edgeColor[ei] || "rgba(40,54,74,0.72)";           // finder's colour in a room, else default ink
+    g.lineWidth = Math.max(0.8, w);
     g.beginPath(); strokePathsG(g, ei); g.stroke();
   }
   fogDirty = false;
@@ -1179,6 +1218,17 @@ function begin(lat, lon){
   map.whenReady(()=>{ resize(); fitRevealed(); draw(); });
   setTimeout(()=>{ resize(); draw(); }, 300);
   document.getElementById("guess").focus();
+  maybeRejoin();                                  // reconnect to a saved room, or one from a #room= invite link
+}
+// always join a room so a shareable code is live: an invite link wins, else the last room, else our own
+function maybeRejoin(){
+  if (daily || !Sync.available()) return;
+  buildRoomPanel(); renderRoster({}, null);       // show the panel immediately (code fills in once connected)
+  const link = (location.hash.match(/#room=([^&]+)/)||[])[1];
+  const prev = Sync.saved();
+  if (link) doJoin(decodeURIComponent(link), lastName);
+  else if (prev) doJoin(prev.code, prev.name);
+  else doJoin(myRoomCode(), lastName);
 }
 // reveal the initial street after a start point is chosen (used by the not-in-Paris chooser)
 function seedStart(lat, lon){
@@ -1204,6 +1254,10 @@ function applyLang(){
   document.getElementById("langBtn").textContent = LANG==="fr" ? "EN" : "FR";
   document.getElementById("rulesBtn").title = t("rules");
   document.getElementById("fbBtn").title = t("feedback");
+  const mc = document.getElementById("mergeCode");
+  if (mc){ mc.placeholder = t("mergePlaceholder"); document.getElementById("mergeBtn").title = t("mergeRoom");
+           document.getElementById("roomCode").title = t("copyInvite");
+           document.getElementById("meName").placeholder = t("yourName"); }
   if (map) updateStats();
 }
 
@@ -1258,6 +1312,9 @@ function showDaily(){
 }
 function startDaily(){
   closeModal();
+  Sync.leave();                                   // daily is solo: leave the room and hide its panel
+  document.getElementById("room").style.display = "none";
+  edgeColor.fill(null);
   daily = true; streak=0; bestStreak=0;
   // wipe current state
   revEdge.fill(0); revNode.fill(0); revFace.fill(0);
@@ -1338,6 +1395,90 @@ function showFeedback(){
     .then(()=>{ closeModal(); flash(FR?"Merci pour votre retour !":"Thanks for the feedback!", true); })
     .catch(()=>{ closeModal(); flash(FR?"Échec de l'envoi — réessayez plus tard":"Couldn't send — try again later", false); });
   };
+}
+
+// ---- multiplayer: always in a room (sync.js). Bottom-right shows your room code; the box below
+//      merges another room by joining it (your progress travels with you — gossip union). --------
+function applyRemoteFound(v, live){                // v = {n, la, lo, by, c}; live=false while replaying history
+  if (daily) return;                              // daily is solo: never take remote reveals onto its board
+  const ei = resolveStreet(v.n, v.la, v.lo);
+  if (ei < 0 || revEdge[ei]) return;              // unknown here, or we already have it (union)
+  applyingRemote = true; remoteColor = (Sync.me && v.by === Sync.me.id) ? null : v.c;
+  const ok = reveal(ei, !live);                   // live remote finds animate; history replays silently
+  applyingRemote = false; remoteColor = null;
+  if (!ok) return;
+  if (live){
+    const who = roster[v.by] && roster[v.by].name;
+    if (who && (!Sync.me || v.by !== Sync.me.id)) flash(t("found")(who, EDGES[ei].n), true);
+    updateStats(); checkMilestones();
+  }
+}
+// build the room panel once (so roster updates don't clobber the merge textbox mid-typing)
+function buildRoomPanel(){
+  const el = document.getElementById("room");
+  if (el.dataset.built) return; el.dataset.built = "1";
+  el.innerHTML =
+    `<div class="rhdr"><span class="code" id="roomCode" title="${t("copyInvite")}"></span>`+
+    `<span class="rcount" id="roomCount"></span></div>`+
+    `<div class="me"><i id="meDot"></i><input id="meName" maxlength="24" placeholder="${t("yourName")}"></div>`+
+    `<div class="peers" id="roomPeers"></div>`+
+    `<div class="merge"><input id="mergeCode" placeholder="${t("mergePlaceholder")}" autocapitalize="characters" autocomplete="off">`+
+    `<button id="mergeBtn" title="${t("mergeRoom")}">↳</button></div>`;
+  document.getElementById("roomCode").onclick = copyInvite;
+  const nameInp = document.getElementById("meName");
+  nameInp.value = lastName;
+  const rename = ()=>{                              // save the name; re-announce it to the room if connected
+    const v = nameInp.value.trim(); if (!v || v === lastName) return;
+    localStorage.setItem("paris-name", v); lastName = v;
+    if (Sync.code) doJoin(Sync.code, v);           // re-join same room to broadcast the new identity
+  };
+  nameInp.addEventListener("change", rename);
+  nameInp.addEventListener("keydown", e=>{ if(e.key==="Enter") nameInp.blur(); });
+  const go = ()=>{ const v=document.getElementById("mergeCode").value.trim(); if(v){ document.getElementById("mergeCode").value=""; doJoin(v); } };
+  document.getElementById("mergeBtn").onclick = go;
+  document.getElementById("mergeCode").addEventListener("keydown", e=>{ if(e.key==="Enter") go(); });
+}
+function renderRoster(players, me){                // only refresh the code + peer dots, never the textbox
+  roster = players || {};
+  buildRoomPanel();
+  const el = document.getElementById("room");
+  if (daily){ el.style.display = "none"; return; }
+  el.style.display = "block";
+  document.getElementById("roomCode").textContent = Sync.code ? Sync.code + " ⧉" : "…";
+  if (Sync.me) document.getElementById("meDot").style.background = Sync.me.color;
+  const ps = Object.values(roster);
+  document.getElementById("roomCount").textContent = ps.length > 1 ? `${ps.length} 👥` : "";
+  // peer dots exclude yourself (your name is shown in the editable field above)
+  document.getElementById("roomPeers").innerHTML =
+    Object.entries(roster).filter(([id]) => !Sync.me || id !== Sync.me.id)
+      .map(([id,p]) => `<i style="background:${p.color}" title="${(p.name||"").replace(/"/g,"&quot;")}"></i>`).join("");
+}
+function copyInvite(){
+  if (!Sync.code) return;
+  const link = location.origin + location.pathname + "#room=" + Sync.code;
+  navigator.clipboard.writeText(link).then(()=> flash(t("copied"), true));
+}
+Sync.onFound(applyRemoteFound);
+Sync.onRoster(renderRoster);
+Sync.onSynced(()=>{ fogDirty = true; updateStats(); save(); draw(); });   // room history done: persist union + repaint
+
+let lastName = localStorage.getItem("paris-name") || "";
+let seedN = 20260717;
+function rngSeed(){ seedN = (seedN*1103515245+12345) & 0x7fffffff; return seedN/0x7fffffff; }   // avoids Math.random for reproducible codes
+function myRoomCode(){                             // stable personal room, so a solo player always has a code to share
+  let c = localStorage.getItem("paris-my-room");
+  if (!c){ c = "PARIS-" + Math.floor(1000 + rngSeed()*9000); localStorage.setItem("paris-my-room", c); }
+  return c;
+}
+async function doJoin(codeInput, name){
+  name = (name||"").trim() || lastName || "Explorer";
+  localStorage.setItem("paris-name", name); lastName = name;
+  const code = (codeInput||"").trim().toUpperCase() || myRoomCode();
+  const ok = await Sync.join(code, name);
+  if (!ok){ flash(t("joinFailed"), false); return; }
+  Sync.pushMany(revList.map(ei => { const p = edgePoint(ei); return [EDGES[ei].n, p[0], p[1]]; }));  // carry our progress into the room
+  renderRoster(roster, Sync.me);
+  flash(t("youJoined")(Sync.code), true);
 }
 
 document.getElementById("reset").addEventListener("click", resetGame);
