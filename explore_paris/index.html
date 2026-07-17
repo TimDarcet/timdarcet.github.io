@@ -1240,7 +1240,9 @@ function seedStart(lat, lon){
 }
 function resetGame(){
   if (!confirm(LANG==="fr"?"Réinitialiser toute la progression ?":"Reset all progress and start over?")) return;
-  try { localStorage.removeItem(SAVE_KEY); } catch(e){}
+  Sync.leave();                                    // drop the current room + its saved reconnect
+  try { localStorage.removeItem(SAVE_KEY); localStorage.removeItem("paris-my-room"); } catch(e){}  // fresh personal room code next load
+  try { history.replaceState(null, "", location.pathname); } catch(e){}  // drop any #room= invite so we don't rejoin it
   location.reload();
 }
 
