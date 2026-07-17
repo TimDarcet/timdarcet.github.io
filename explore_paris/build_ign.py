@@ -24,7 +24,9 @@ ABBR = {"R": "Rue", "AV": "Avenue", "BD": "Boulevard", "PL": "Place", "ALL": "Al
         "SQ": "Square", "PAS": "Passage", "VLA": "Villa", "QU": "Quai", "CHE": "Chemin", "RTE": "Route",
         "CRS": "Cours", "SEN": "Sente", "GAL": "Galerie", "SNT": "Sentier", "PROM": "Promenade",
         "CAR": "Carrefour", "RPT": "Rond-point", "PRV": "Parvis", "HAM": "Hameau", "PTE": "Porte",
-        "ARC": "Arcades", "PSTY": "Péristyle", "CITE": "Cité", "RUELL": "Ruelle", "ESP": "Esplanade"}
+        "ARC": "Arcades", "PSTY": "Péristyle", "CITE": "Cité", "RUELL": "Ruelle", "ESP": "Esplanade",
+        "PLE": "Passerelle", "VGE": "Village", "RPE": "Rampe", "TSSE": "Terrasse", "RES": "Résidence",
+        "VOI": "Voie", "TUN": "Tunnel", "AUT": "Autoroute", "COR": "Corniche", "MAIL": "Mail"}
 def expand_abbr(s):
     if not isinstance(s, str) or not s: return s
     LOW = {"De", "Du", "Des", "La", "Le", "Les", "À", "A", "Aux", "Au", "En", "Et", "Sur", "D'", "L'"}
@@ -83,7 +85,7 @@ def main(arg, extra_nature=(), out=OUT):
     col = g["nom_collaboratif_gauche"].fillna(g["nom_collaboratif_droite"]).map(expand_abbr)
     g["_nm"] = ban.fillna(col)
     g = g[g["_nm"].notna() & (g["_nm"] != "")]
-    g = g[~g["_nm"].str.match(r"Voie \w+/\d+")]                  # drop internal "Voie X/NN" codes
+    g = g[~g["_nm"].str.contains(r"\b\w{1,3}/\d+\b", regex=True)]   # drop internal codes ("Voie M/18", "Vc Fi/13")
     n_ban = ban.notna().sum(); n_col = (ban.isna() & col.notna()).sum()
     print(f"{len(g)} named road segments in Paris ({n_ban} BAN, {n_col} collaboratif-only)", file=sys.stderr)
 
