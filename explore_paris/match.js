@@ -3,7 +3,7 @@
 // punctuation dropped, leading generic words (rue/place/de/…) stripped. lev() is edit distance.
 const STRIP = new Set(("rue ruelle avenue place placette passage villa allee impasse boulevard bd square route "+
   "chemin cite acces quai quaie cour cours pont sortie port promenade galerie sentier sente hameau esplanade "+
-  "parvis jardin jardins mail rond point carrefour pont "+
+  "parvis jardin jardins mail rond point carrefour pont voie "+
   "de du des la le les l d aux au a en et sur").split(" "));
 const U=["","un","deux","trois","quatre","cinq","six","sept","huit","neuf","dix","onze","douze","treize",
   "quatorze","quinze","seize","dix-sept","dix-huit","dix-neuf"];

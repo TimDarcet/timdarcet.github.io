@@ -488,7 +488,8 @@ function edgeAt(px, py){
   updateXform();
   const r = 8, wr = r/S;                           // grab radius in px, and in world units
   let best = -1, bd = r*r;
-  for (const ei of revList){
+  const list = debug ? EDGES.keys() : revList;      // debug: hit-test ALL streets, else only revealed
+  for (const ei of list){
     const bb = PX.eb[ei];                           // cull by world bbox (expanded by grab radius)
     if (px<bb[0]*S+Tx-r || px>bb[2]*S+Tx+r || py<bb[1]*S+Ty-r || py>bb[3]*S+Ty+r) continue;
     for (const a of PX.e[ei]){
@@ -792,9 +793,12 @@ function draw(){
     ctx.shadowBlur=0;
   }
 
-  // 7. hovered revealed street: highlight it and show its name in a tooltip by the cursor
+  // 7. hovered street: highlight it and show its name in a tooltip by the cursor. Normally only
+  //    revealed streets are hoverable (red); in debug mode unrevealed ones show too, tinted purple.
   if (hoverEdge >= 0 && hoverXY){
-    ctx.strokeStyle = "rgba(234,67,53,0.9)"; ctx.lineWidth = Math.max(2, brush*0.5);
+    const spoiler = !revEdge[hoverEdge];           // unrevealed -> debug-only spoiler
+    ctx.strokeStyle = spoiler ? "rgba(167,139,250,0.95)" : "rgba(234,67,53,0.9)";
+    ctx.lineWidth = Math.max(2, brush*0.5);
     ctx.beginPath(); strokePaths(hoverEdge); ctx.stroke();
     const label = EDGES[hoverEdge].n;
     ctx.font = "600 13px ui-sans-serif,system-ui,sans-serif";
@@ -802,7 +806,7 @@ function draw(){
     let bx = hoverXY.x + 14, by = hoverXY.y - bh - 8;
     if (bx+bw > W) bx = hoverXY.x - bw - 14;
     if (by < 0) by = hoverXY.y + 14;
-    ctx.fillStyle = "rgba(20,28,40,0.92)";
+    ctx.fillStyle = spoiler ? "rgba(59,32,92,0.92)" : "rgba(20,28,40,0.92)";
     ctx.beginPath(); ctx.roundRect(bx, by, bw, bh, 6); ctx.fill();
     ctx.fillStyle = "#fff"; ctx.textAlign="left"; ctx.textBaseline="middle";
     ctx.fillText(label, bx+pad, by+bh/2);
