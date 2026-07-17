@@ -36,7 +36,8 @@ function deRoman(s){ return s.replace(/\b[IVX]+(er|re)?\b(?!\/)/g,
   (m,suf)=> " "+(suf?frOrd(roman(m.slice(0,-suf.length))):roman(m))+" "); }
 function core(s){
   let x = s.replace(SUP_RX,c=>SUP[c])            // expand superscripts (Iᵉʳ -> Ier) BEFORE NFD, which
-          .normalize("NFD").replace(/\p{Diacritic}/gu,"");  // would otherwise decompose & drop them
+          .normalize("NFD").replace(/\p{Diacritic}/gu,"")   // would otherwise decompose & drop them
+          .replace(/œ/g,"oe").replace(/Œ/g,"OE").replace(/æ/g,"ae").replace(/Æ/g,"AE");  // split ligatures
   x = deRoman(x).toLowerCase();                  // roman on de-accented text so \b is reliable
   let t = spellNums(x).replace(/[^a-z0-9]+/g," ").trim()
            .replace(/\bst\b/g,"saint").replace(/\bste\b/g,"sainte").split(" ");

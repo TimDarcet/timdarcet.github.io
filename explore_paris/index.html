@@ -948,17 +948,20 @@ function submitGuess(){
   }
   const tol = 1;                               // accept the exact name plus or minus one typo
   if (best>=0 && bestD<=tol){
-    // reveal EVERY revealable street matching this name, chaining: each reveal can extend the
-    // frontier and make more same-named streets reachable (e.g. Rue de Clichy -> Place de Clichy).
+    // reveal EVERY street matching this name anywhere on the map, not just sections touching the
+    // frontier — one guess of "Boulevard Henri IV" reveals all its disconnected stretches at once.
     const bc = CORE[best];
     const byName = new Map();      // revealed street name -> segment count (distinct names share a core key)
-    let found = true;
-    while (found){
-      found = false;
-      // snapshot frontier: reveal() mutates it, so don't iterate it live
-      const cands = new Set();
-      for (const ni of frontier) for (const ei of nodeEdges[ni]) if (!revEdge[ei] && CORE[ei]===bc) cands.add(ei);
-      for (const ei of cands){ if (!revEdge[ei] && reveal(ei)){ byName.set(EDGES[ei].n, (byName.get(EDGES[ei].n)||0)+1); growViewToEdge(ei); found = true; } }
+    let bounds = null;             // union of all revealed sections, to grow the view once at the end
+    for (let ei=0; ei<EDGES.length; ei++){
+      if (!revEdge[ei] && CORE[ei]===bc && reveal(ei)){
+        byName.set(EDGES[ei].n, (byName.get(EDGES[ei].n)||0)+1);
+        bounds = bounds ? bounds.extend(edgeBounds(ei)) : edgeBounds(ei);
+      }
+    }
+    if (bounds && !map.getBounds().contains(bounds)){
+      const merged = map.getBounds().extend(bounds);
+      tweenTo(merged.getCenter(), zoomForBounds(merged, 80, map.getZoom()), 500);
     }
     streak++; bestStreak=Math.max(bestStreak,streak);
     updateStats(); flourishStreak(); checkMilestones(); draw();
