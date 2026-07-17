@@ -1,0 +1,13 @@
+# build inputs & generated caches — not part of the deployed site
+.ign-venv/
+__pycache__/
+*.pyc
+
+# IGN BD TOPO source archive + extraction (build_ign.py input; re-downloadable)
+bdtopo_d075.7z
+bdtopo_d075_extracted/
+
+# OSM Overpass raw caches (build.py input; re-fetched if absent)
+paris_raw.json
+arr_raw.json
+plaza_raw.json

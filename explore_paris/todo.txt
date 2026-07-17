@@ -1,0 +1,9 @@
+# DONE — 2026-07-12
+[x] "Per arrondissement" took too much space on phone — now a slide-out drawer (▤ chip, top-right),
+    hidden by default on all screens; toggle to open/close.
+[x] Golden halo changed appearance with zoom — halo width is now ground-proportional (brush*1.5),
+    was a fixed +6px add that dominated at low zoom.
+[x] Other non-zoom-invariant bits fixed: ink street width, reveal draw-on flash, hover highlight
+    (all now brush-proportional); node markers set to a fixed screen size (they're tap targets, not ground features).
+[x] Optimize further — mobile detection: DPR capped at 1.5 (was 2), and the SVG turbulence edge filter
+    swapped for a cheap blur on phones (and while dragging). Filters are the main per-render cost.
