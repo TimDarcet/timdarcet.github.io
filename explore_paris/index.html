@@ -98,7 +98,7 @@
   #room .me input:hover { border-color: #cdd6e0; }
   #room .me input:focus { background: #fff; border-color: #1a73e8; text-shadow: none; }
   #room .peers { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 5px; justify-content: flex-end; }
-  #room .peers i { width: 10px; height: 10px; border-radius: 50%; display: inline-block; box-shadow: 0 0 0 1px rgba(0,0,0,.25); }
+  #room .peers i { width: 10px; height: 10px; border-radius: 50%; display: inline-block; box-shadow: 0 0 0 1px rgba(0,0,0,.25); cursor: pointer; }
   #room .merge { margin-top: 6px; }
   #room .merge input { width: 100%; background: rgba(255,255,255,.85); border: 1px solid #cdd6e0; border-radius: 7px;
                        padding: 6px 8px; font-size: 12px; color: #1f2a37; outline: none; text-align: right; text-shadow: none; }
@@ -1449,10 +1449,12 @@ function renderRoster(players, me){                // only refresh the code + pe
   if (Sync.me) document.getElementById("meDot").style.background = Sync.me.color;
   const ps = Object.values(roster);
   document.getElementById("roomCount").textContent = ps.length > 1 ? `${ps.length} 👥` : "";
-  // peer dots exclude yourself (your name is shown in the editable field above)
-  document.getElementById("roomPeers").innerHTML =
+  // peer dots exclude yourself (your name is shown in the editable field above); name on hover/tap
+  const peers = document.getElementById("roomPeers");
+  peers.innerHTML =
     Object.entries(roster).filter(([id]) => !Sync.me || id !== Sync.me.id)
-      .map(([id,p]) => `<i style="background:${p.color}" title="${(p.name||"").replace(/"/g,"&quot;")}"></i>`).join("");
+      .map(([id,p]) => `<i style="background:${p.color}" title="${(p.name||"").replace(/"/g,"&quot;")}" data-nm="${(p.name||"").replace(/"/g,"&quot;")}"></i>`).join("");
+  peers.onclick = e => { const nm = e.target.dataset && e.target.dataset.nm; if (nm) flash(nm, true); };  // tap = show name (no hover on touch)
 }
 function copyInvite(){
   if (!Sync.code) return;
