@@ -987,17 +987,25 @@ function submitGuess(){
   }
   const tol = 1;                               // accept the exact name plus or minus one typo
   if (best>=0 && bestD<=tol){
-    // reveal EVERY section sharing the matched street's EXACT name anywhere on the map (so
-    // "Boulevard Henri IV" reveals all its stretches) — but NOT other streets that merely share a
-    // core key, e.g. Boulevard Malesherbes must not drag in Cité Malesherbes.
-    const bn = EDGES[best].n;
+    // Fixed-point reveal: reveal every REACHABLE edge whose core matches the guess, plus all
+    // sections sharing each matched edge's EXACT name (so gapped streets like Boulevard Henri IV
+    // reveal fully). Revealing grows the frontier, so re-scan until a round reveals nothing — this
+    // chains connected streets (Rue d'Arcole -> Pont d'Arcole) while never dragging in a same-named
+    // but DISCONNECTED street (Bd Malesherbes must not reveal Cité Malesherbes).
     const byName = new Map();      // revealed street name -> segment count
     let bounds = null;             // union of all revealed sections, to grow the view once at the end
-    for (let ei=0; ei<EDGES.length; ei++){
-      if (!revEdge[ei] && EDGES[ei].n===bn && reveal(ei)){
-        byName.set(EDGES[ei].n, (byName.get(EDGES[ei].n)||0)+1);
-        bounds = bounds ? bounds.extend(edgeBounds(ei)) : edgeBounds(ei);
+    const revealNamed = ei => {    // reveal edge ei and every unrevealed section with its exact name
+      for (let k=0;k<EDGES.length;k++) if (!revEdge[k] && EDGES[k].n===EDGES[ei].n && reveal(k)){
+        byName.set(EDGES[k].n, (byName.get(EDGES[k].n)||0)+1);
+        bounds = bounds ? bounds.extend(edgeBounds(k)) : edgeBounds(k);
       }
+    };
+    let grew = true;
+    while (grew){
+      grew = false;
+      const reach = new Set();     // current frontier's unrevealed edges
+      for (const ni of frontier) for (const ei of nodeEdges[ni]) if (!revEdge[ei]) reach.add(ei);
+      for (const ei of reach) if (!revEdge[ei] && lev(q, CORE[ei])<=tol){ revealNamed(ei); grew = true; }
     }
     if (bounds && !map.getBounds().contains(bounds)){
       const merged = map.getBounds().extend(bounds);
