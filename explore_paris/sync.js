@@ -6,30 +6,12 @@
 // SETUP (one-time, ~5 min, needs a GitHub or email account — no Google):
 //   1. supabase.com -> New project (pick a Europe region for low latency). Note the Project URL
 //      and the anon/public API key (Project Settings -> API). Paste them into CONFIG below.
-//   2. In the SQL editor, run:
-//
-//        create table public.found (
-//          room  text not null,
-//          key   text not null,
-//          name  text not null,
-//          la    double precision not null,
-//          lo    double precision not null,
-//          by    text,
-//          color text,
-//          ts    timestamptz not null default now(),
-//          primary key (room, key)               -- grow-only: one row per street per room
-//        );
-//        alter table public.found enable row level security;
-//        create policy "read"   on public.found for select using (true);
-//        create policy "append" on public.found for insert with check (true);
-//        -- no update/delete policy => discoveries can never be overwritten or removed
-//        alter publication supabase_realtime add table public.found;   -- live INSERT push
-//
+//   2. In the SQL editor, paste the contents of supabase.sql (next to this file) and run it.
 //   The roster uses Realtime Presence (no table) — it auto-drops players when their tab closes.
 const Sync = (() => {
   const CONFIG = {
-    // url: "https://YOUR-PROJECT.supabase.co",
-    // key: "YOUR-ANON-PUBLIC-KEY",
+    url: "https://dihnwuevhtlfhvioeorb.supabase.co",
+    key: "sb_publishable_EPlGutV1JbxdnZh4bMhJIQ_z5vJ74m2",   // publishable/anon key (safe to ship: gated by RLS)
   };
   const LIB = "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2";
   const COLORS = ["#ff7a59","#4aa3ff","#7dd8a0","#e0a92e","#c084fc","#f472b6","#38bdf8","#fb923c"];
@@ -40,7 +22,7 @@ const Sync = (() => {
   let dbChan = null, presChan = null, roster = {};
   let onFoundCb = () => {}, onRosterCb = () => {}, onSyncedCb = () => {};
 
-  const available = () => !!CONFIG.url;
+  const available = () => !!(CONFIG.url && CONFIG.key);
   function id(){
     let x = localStorage.getItem("paris-player-id");
     if (!x){ x = (crypto.randomUUID ? crypto.randomUUID() : "u" + Math.abs(h32(navigator.userAgent))); localStorage.setItem("paris-player-id", x); }
