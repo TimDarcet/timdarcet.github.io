@@ -974,15 +974,18 @@ function confStep(){
 function submitGuess(){
   const inp = document.getElementById("guess");
   const raw = inp.value.trim();
-  const q = core(inp.value); inp.value="";
+  inp.value="";
   if (raw){ history.push(raw); histPos = history.length; }   // shell-style: ↑ recalls last typed
-  if (q.length < 2) return;
+  // try the query both stripped and unstripped, so "porte jaune" reaches "Rue de la Porte Jaune"
+  const qs = [...new Set([core(raw), core(raw, false)])].filter(q => q.length >= 2);
+  if (!qs.length) return;
+  const md = c => Math.min(...qs.map(q => lev(q, c)));   // best edit distance across query variants
   const cand = new Set();
   for(const ni of frontier) for(const ei of nodeEdges[ni]) if(!revEdge[ei]) cand.add(ei);
   let best=-1, bestD=1e9;
   for (const ei of cand){
     const c = CORE[ei]; if(!c) continue;
-    const d = lev(q, c);                       // edit distance against the full stripped name
+    const d = md(c);                           // edit distance against the full stripped name
     if (d < bestD){ bestD=d; best=ei; }
   }
   const tol = 1;                               // accept the exact name plus or minus one typo
@@ -1005,7 +1008,7 @@ function submitGuess(){
       grew = false;
       const reach = new Set();     // current frontier's unrevealed edges
       for (const ni of frontier) for (const ei of nodeEdges[ni]) if (!revEdge[ei]) reach.add(ei);
-      for (const ei of reach) if (!revEdge[ei] && lev(q, CORE[ei])<=tol){ revealNamed(ei); grew = true; }
+      for (const ei of reach) if (!revEdge[ei] && md(CORE[ei])<=tol){ revealNamed(ei); grew = true; }
     }
     if (bounds && !map.getBounds().contains(bounds)){
       const merged = map.getBounds().extend(bounds);
@@ -1023,7 +1026,7 @@ function submitGuess(){
     // spot what you meant under the fog (no panning — only segments already on-screen).
     const glow = ei => { anim.push({type:"locate", ei, t:0}); };
     const already = [], hidden = [];
-    for (let i=0;i<CORE.length;i++) if (CORE[i]===q){ (revEdge[i]?already:hidden).push(i); }
+    for (let i=0;i<CORE.length;i++) if (qs.includes(CORE[i])){ (revEdge[i]?already:hidden).push(i); }
     for (const ei of already.concat(hidden)) glow(ei);
     if (already.length || hidden.length){
       if (!animRunning){ animRunning = true; requestAnimationFrame(animLoop); }

@@ -38,17 +38,21 @@ function roman(r){ let n=0,p=0; for(let i=r.length-1;i>=0;i--){ const v=RVAL[r[i
 // "V/11","X/13". Assumes superscripts already expanded and accents stripped; run before lowercasing.
 function deRoman(s){ return s.replace(/\b[IVX]+(er|re)?\b(?!\/)/g,
   (m,suf)=> " "+(suf?frOrd(roman(m.slice(0,-suf.length))):roman(m))+" "); }
-function core(s){
+// strip=true (default) peels the leading street-type + connectors; strip=false keeps them, so a query
+// can be matched both ways (e.g. "porte jaune" -> "jaune" AND "portejaune", to hit "Rue de la Porte Jaune").
+function core(s, strip=true){
   let x = s.replace(SUP_RX,c=>SUP[c])            // expand superscripts (Iᵉʳ -> Ier) BEFORE NFD, which
           .normalize("NFD").replace(/\p{Diacritic}/gu,"")   // would otherwise decompose & drop them
           .replace(/œ/g,"oe").replace(/Œ/g,"OE").replace(/æ/g,"ae").replace(/Æ/g,"AE");  // split ligatures
   x = deRoman(x).toLowerCase();                  // roman on de-accented text so \b is reliable
   let t = spellNums(x).replace(/[^a-z0-9]+/g," ").trim()
            .replace(/\bst\b/g,"saint").replace(/\bste\b/g,"sainte").split(" ");
-  while (t.length > 1 && CONN.has(t[0])) t.shift();           // any number of leading connectors
-  if (t.length > 2 && TYPE.has(t[0]+" "+t[1])) t.splice(0,2); // one street-type word (2-token forms
-  else if (t.length > 1 && TYPE.has(t[0])) t.shift();          // like "rond point" checked first)
-  while (t.length > 1 && CONN.has(t[0])) t.shift();           // and the connectors after it ("de la")
+  if (strip){
+    while (t.length > 1 && CONN.has(t[0])) t.shift();           // any number of leading connectors
+    if (t.length > 2 && TYPE.has(t[0]+" "+t[1])) t.splice(0,2); // one street-type word (2-token forms
+    else if (t.length > 1 && TYPE.has(t[0])) t.shift();          // like "rond point" checked first)
+    while (t.length > 1 && CONN.has(t[0])) t.shift();           // and the connectors after it ("de la")
+  }
   return t.join("");
 }
 // Damerau-Levenshtein (OSA): like edit distance but an adjacent transposition (e.g. Cartoux/Catroux)
