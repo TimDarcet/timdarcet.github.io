@@ -348,6 +348,32 @@ const DATA_VERSION = (()=>{ let h=EDGES.length; for(const e of EDGES) for(let i=
 const edgePoint = ei => { const p=EDGES[ei].p[0]; return p[(p.length/2)|0]; };   // representative point
 const edgesByName = new Map();                   // name -> edge indices, for healing by identity
 EDGES.forEach((e,i)=>{ const a=edgesByName.get(e.n); if(a) a.push(i); else edgesByName.set(e.n,[i]); });
+// Same-name merge: sections sharing an exact name AND coming within 250m are one street, revealed
+// together (a street split by a gap). Farther same-name streets stay separate — e.g. the two
+// unrelated "Rue Michel-Ange" sit 3km apart. nameGroup[ei] = every edge merged with ei (incl. itself).
+const nameGroup = new Array(EDGES.length).fill(null);
+(()=>{
+  const M = 111320;                              // metres per degree of latitude
+  const near = (A,B) => {                         // do vertex sets A and B come within 250m of each other?
+    for (const [la1,lo1] of A) for (const [la2,lo2] of B){
+      const dy=(la1-la2)*M, dx=(lo1-lo2)*M*Math.cos((la1+la2)/2*Math.PI/180);
+      if (dx*dx+dy*dy < 6.25e4) return true;      // (250m)² threshold
+    }
+    return false;
+  };
+  for (const ids of edgesByName.values()){
+    if (ids.length < 2) continue;
+    const P = new Map(ids.map(i=>[i, EDGES[i].p.flat()]));   // all vertices per edge (p is a MultiLineString)
+    const seen = new Set();                        // flood-fill the <250m adjacency into components
+    for (const s of ids){
+      if (seen.has(s)) continue;
+      const comp=[s], stack=[s]; seen.add(s);
+      while (stack.length){ const u=stack.pop();
+        for (const v of ids) if (!seen.has(v) && near(P.get(u),P.get(v))){ seen.add(v); comp.push(v); stack.push(v); } }
+      if (comp.length > 1) for (const e of comp) nameGroup[e]=comp;
+    }
+  }
+})();
 // re-resolve a saved [name, lat, lon] to the current best-matching edge (nearest same-named segment)
 function resolveStreet(name, lat, lon){
   const c = edgesByName.get(name); if (!c) return -1;
@@ -454,6 +480,7 @@ function reveal(ei, replay){
     sound(EDGES[ei].k, filled ? 40000 : 0, filled>0);
     if (!animRunning) { animRunning = true; requestAnimationFrame(animLoop); }
   }
+  if (nameGroup[ei]) for (const k of nameGroup[ei]) reveal(k, replay);   // merged same-name sections are one street
   return true;
 }
 
@@ -990,25 +1017,24 @@ function submitGuess(){
   }
   const tol = 1;                               // accept the exact name plus or minus one typo
   if (best>=0 && bestD<=tol){
-    // Fixed-point reveal: reveal every REACHABLE edge whose core matches the guess, plus all
-    // sections sharing each matched edge's EXACT name (so gapped streets like Boulevard Henri IV
-    // reveal fully). Revealing grows the frontier, so re-scan until a round reveals nothing — this
-    // chains connected streets (Rue d'Arcole -> Pont d'Arcole) while never dragging in a same-named
-    // but DISCONNECTED street (Bd Malesherbes must not reveal Cité Malesherbes).
-    const byName = new Map();      // revealed street name -> segment count
-    let bounds = null;             // union of all revealed sections, to grow the view once at the end
-    const revealNamed = ei => {    // reveal edge ei and every unrevealed section with its exact name
-      for (let k=0;k<EDGES.length;k++) if (!revEdge[k] && EDGES[k].n===EDGES[ei].n && reveal(k)){
-        byName.set(EDGES[k].n, (byName.get(EDGES[k].n)||0)+1);
-        bounds = bounds ? bounds.extend(edgeBounds(k)) : edgeBounds(k);
-      }
-    };
+    // Fixed-point reveal: reveal every REACHABLE edge whose core matches the guess. reveal() itself
+    // pulls in each edge's merged same-name group (within 250m — see nameGroup). Revealing grows the
+    // frontier, so re-scan until a round reveals nothing — this chains connected streets (Rue d'Arcole
+    // -> Pont d'Arcole) while never dragging in a same-named but distant street (the two unrelated
+    // "Rue Michel-Ange", 3km apart, or Bd Malesherbes vs Cité Malesherbes).
+    const start = revList.length;  // everything revealed by this guess lands after here, in reveal order
     let grew = true;
     while (grew){
       grew = false;
       const reach = new Set();     // current frontier's unrevealed edges
       for (const ni of frontier) for (const ei of nodeEdges[ni]) if (!revEdge[ei]) reach.add(ei);
-      for (const ei of reach) if (!revEdge[ei] && md(CORE[ei])<=tol){ revealNamed(ei); grew = true; }
+      for (const ei of reach) if (!revEdge[ei] && md(CORE[ei])<=tol){ reveal(ei); grew = true; }
+    }
+    const byName = new Map();      // revealed street name -> segment count
+    let bounds = null;             // union of all revealed sections, to grow the view once at the end
+    for (let i=start;i<revList.length;i++){ const k=revList[i];
+      byName.set(EDGES[k].n, (byName.get(EDGES[k].n)||0)+1);
+      bounds = bounds ? bounds.extend(edgeBounds(k)) : edgeBounds(k);
     }
     if (bounds && !map.getBounds().contains(bounds)){
       const merged = map.getBounds().extend(bounds);
