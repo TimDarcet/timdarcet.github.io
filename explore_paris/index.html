@@ -1434,9 +1434,9 @@ function buildRoomPanel(){
   el.innerHTML =
     `<div class="rhdr"><span class="code" id="roomCode" title="${t("copyInvite")}"></span>`+
     `<span class="rcount" id="roomCount"></span></div>`+
-    `<div class="me"><i id="meDot"></i><input id="meName" maxlength="24" placeholder="${t("yourName")}"></div>`+
+    `<form class="me" id="meForm"><i id="meDot"></i><input id="meName" maxlength="24" enterkeyhint="done" placeholder="${t("yourName")}"></form>`+
     `<div class="peers" id="roomPeers"></div>`+
-    `<div class="merge"><input id="mergeCode" placeholder="${t("mergePlaceholder")}" autocapitalize="characters" autocomplete="off"></div>`;
+    `<form class="merge" id="mergeForm"><input id="mergeCode" enterkeyhint="go" placeholder="${t("mergePlaceholder")}" autocapitalize="characters" autocomplete="off"></form>`;
   document.getElementById("roomCode").onclick = copyInvite;
   const nameInp = document.getElementById("meName");
   nameInp.value = lastName;
@@ -1446,9 +1446,10 @@ function buildRoomPanel(){
     if (Sync.code) doJoin(Sync.code, v);           // re-join same room to broadcast the new identity
   };
   nameInp.addEventListener("change", rename);
-  nameInp.addEventListener("keydown", e=>{ if(e.key==="Enter") nameInp.blur(); });
+  // real forms so the mobile soft-keyboard action key fires reliably (was advancing focus to #guess instead)
+  document.getElementById("meForm").addEventListener("submit", e=>{ e.preventDefault(); nameInp.blur(); });
   const mergeInp = document.getElementById("mergeCode");
-  mergeInp.addEventListener("keydown", e=>{ if(e.key==="Enter"){ const v=mergeInp.value.trim(); if(v){ mergeInp.value=""; doJoin(v); } } });
+  document.getElementById("mergeForm").addEventListener("submit", e=>{ e.preventDefault(); const v=mergeInp.value.trim(); if(v){ mergeInp.value=""; doJoin(v); } });
 }
 function renderRoster(players, me){                // only refresh the code + peer dots, never the textbox
   roster = players || {};

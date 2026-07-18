@@ -25,9 +25,10 @@
 <body>
 <h1>Paris street match tester</h1>
 <input id="q" placeholder="type a guess…" autocomplete="off" autofocus>
-<div class="note">Ranks <b id="n">…</b> streets in the whole database by edit distance (<code>lev</code>) against
-  <code>core(query)</code>. Game accepts distance ≤ 1 (green) among <i>reachable</i> streets; 2 is a near-miss (amber).
-  Here we search the <b>entire</b> database, ignoring reachability.</div>
+<div class="note">Ranks <b id="n">…</b> streets in the whole database by edit distance (<code>lev</code>), taking the best of the
+  query tried <b>both stripped and unstripped</b> (<code>core(q)</code> and <code>core(q,false)</code>) — as the game does,
+  so <code>porte jaune</code> reaches <i>Rue de la Porte Jaune</i>. Game accepts distance ≤ 1 (green) among <i>reachable</i>
+  streets; 2 is a near-miss (amber). Here we search the <b>entire</b> database, ignoring reachability.</div>
 <div id="summary"></div>
 <table><thead><tr><th class="d">dist</th><th>street name</th><th>core(name)</th></tr></thead>
 <tbody id="rows"></tbody></table>
