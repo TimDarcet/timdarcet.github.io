@@ -1466,9 +1466,7 @@ Sync.onRoster(renderRoster);
 Sync.onSynced(()=>{ fogDirty = true; updateStats(); save(); draw(); });   // room history done: persist union + repaint
 
 let lastName = localStorage.getItem("paris-name") || "";
-let seedN = 20260717;
-function rngSeed(){ seedN = (seedN*1103515245+12345) & 0x7fffffff; return seedN/0x7fffffff; }   // avoids Math.random for reproducible codes
-const newCode = () => String(Math.floor(1000 + rngSeed()*9000));   // a fresh room code (Sync.join persists it as the current room)
+const newCode = () => String(100000 + Math.floor(Math.random()*900000));   // fresh 6-digit room code, unique per device (Sync.join persists it)
 async function doJoin(codeInput, name){
   name = (name||"").trim() || lastName || "Explorer";
   localStorage.setItem("paris-name", name); lastName = name;
