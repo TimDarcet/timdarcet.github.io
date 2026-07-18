@@ -11,3 +11,6 @@ bdtopo_d075_extracted/
 paris_raw.json
 arr_raw.json
 plaza_raw.json
+
+# Foglamp publish metadata (scan.lock.json contains the private edit token)
+.foglamp/

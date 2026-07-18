@@ -22,6 +22,30 @@ const Sync = (() => {
   let dbChan = null, presChan = null, roster = {};
   let onFoundCb = () => {}, onRosterCb = () => {}, onSyncedCb = () => {};
 
+  // Outbox: rows whose upsert failed (offline / transient error) are stashed here and retried on
+  // (re)connect and on "online", so a dropped push never silently loses a discovery for peers.
+  let outbox = [];
+  const loadOutbox = () => { try { outbox = JSON.parse(localStorage.getItem("paris-outbox") || "[]"); } catch(e){ outbox = []; } };
+  const saveOutbox = () => { try { localStorage.setItem("paris-outbox", JSON.stringify(outbox)); } catch(e){} };
+  async function send(rows){                         // upsert rows; on any failure, keep them for a later retry
+    if (!supa || !rows.length) return false;
+    try {
+      for (let i = 0; i < rows.length; i += 500){
+        const { error } = await supa.from("found").upsert(rows.slice(i, i + 500), { onConflict: "room,key", ignoreDuplicates: true });
+        if (error) throw error;
+      }
+      return true;
+    } catch(e){
+      outbox.push(...rows); if (outbox.length > 5000) outbox = outbox.slice(-5000); saveOutbox();
+      return false;
+    }
+  }
+  async function flush(){                            // drain the outbox (rows carry their own room); failures re-queue via send()
+    if (!supa || !outbox.length) return;
+    const rows = outbox; outbox = []; saveOutbox();
+    await send(rows);
+  }
+
   const available = () => !!(CONFIG.url && CONFIG.key);
   function id(){
     let x = localStorage.getItem("paris-player-id");
@@ -35,7 +59,8 @@ const Sync = (() => {
     if (supa) return Promise.resolve(true);
     if (!available()) return Promise.resolve(false);
     if (!loading) loading = script(LIB)
-      .then(() => { supa = window.supabase.createClient(CONFIG.url, CONFIG.key, { realtime: { params: { eventsPerSecond: 20 } } }); return true; })
+      .then(() => { supa = window.supabase.createClient(CONFIG.url, CONFIG.key, { realtime: { params: { eventsPerSecond: 20 } } });
+                    loadOutbox(); addEventListener("online", flush); return true; })
       .catch(() => false);
     return loading;
   }
@@ -53,7 +78,7 @@ const Sync = (() => {
     dbChan = supa.channel("db:" + code)
       .on("postgres_changes", { event: "INSERT", schema: "public", table: "found", filter: "room=eq." + code },
           p => onFoundCb(rowToFound(p.new), true))
-      .subscribe();
+      .subscribe(status => { if (status === "SUBSCRIBED") flush(); });   // retry any pushes that failed offline
 
     // roster via Realtime Presence — auto-drops a player when their tab closes
     roster = {};
@@ -74,13 +99,11 @@ const Sync = (() => {
   function row(n, la, lo){ return { room: code, key: key(n, la, lo), name: n, la, lo, by: me.id, color: me.color }; }
   function pushOne(n, la, lo){                      // a live local discovery; on-conflict-do-nothing keeps the first finder
     if (!code || !supa) return;
-    supa.from("found").upsert(row(n, la, lo), { onConflict: "room,key", ignoreDuplicates: true }).then(()=>{}, ()=>{});
+    send([row(n, la, lo)]);                         // retried from the outbox if it fails
   }
-  async function pushMany(list){                    // seed our existing progress on join (chunked to keep payloads sane)
+  async function pushMany(list){                    // seed our existing progress on join
     if (!code || !supa || !list.length) return;
-    const rows = list.map(([n, la, lo]) => row(n, la, lo));
-    for (let i = 0; i < rows.length; i += 500)
-      await supa.from("found").upsert(rows.slice(i, i + 500), { onConflict: "room,key", ignoreDuplicates: true });
+    await send(list.map(([n, la, lo]) => row(n, la, lo)));
   }
   function leave(){
     try { if (dbChan) supa.removeChannel(dbChan); } catch(e){}

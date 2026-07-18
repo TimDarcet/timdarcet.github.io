@@ -384,8 +384,9 @@ function resolveStreet(name, lat, lon){
 }
 function save(){
   if (daily) return;
-  // store street IDENTITY (name + representative point), not raw indices, so a future rebuild heals
-  const s = revList.map(ei => { const p=edgePoint(ei); return [EDGES[ei].n, p[0], p[1]]; });
+  // store street IDENTITY (name + representative point) + finder colour, not raw indices, so a future
+  // rebuild heals and colours survive a reconnect before the room history has replayed
+  const s = revList.map(ei => { const p=edgePoint(ei); return [EDGES[ei].n, p[0], p[1], edgeColor[ei]]; });
   try { localStorage.setItem(SAVE_KEY, JSON.stringify({ v: DATA_VERSION, s })); } catch(e){}
 }
 function loadSave(){ try { return JSON.parse(localStorage.getItem(SAVE_KEY)); } catch(e){ return null; } }
@@ -396,7 +397,9 @@ function restoreSave(x){
     let n=0; for (const ei of x) if (ei>=0 && ei<EDGES.length && reveal(ei, true)) n++;
     return n;
   }
-  let n=0; for (const [nm,la,lo] of x.s){ const ei=resolveStreet(nm,la,lo); if (ei>=0 && reveal(ei,true)) n++; }
+  // set colour even when reveal() returns false: a merged same-name section may already be revealed
+  // (pulled in by an earlier entry's group-reveal) but still needs its own stored colour applied
+  let n=0; for (const [nm,la,lo,col] of x.s){ const ei=resolveStreet(nm,la,lo); if (ei<0) continue; if (reveal(ei,true)) n++; if (col) edgeColor[ei]=col; }
   if (x.v !== DATA_VERSION){
     console.warn(`Paris save healed across data change: restored ${n}/${x.s.length} streets`);
     save();                                        // migrate to current version so next load is exact
@@ -1442,8 +1445,13 @@ function showFeedback(){
 function applyRemoteFound(v, live){                // v = {n, la, lo, by, c}; live=false while replaying history
   if (daily) return;                              // daily is solo: never take remote reveals onto its board
   const ei = resolveStreet(v.n, v.la, v.lo);
-  if (ei < 0 || revEdge[ei]) return;              // unknown here, or we already have it (union)
-  applyingRemote = true; remoteColor = (Sync.me && v.by === Sync.me.id) ? null : v.c;
+  if (ei < 0) return;                             // unknown here
+  const col = (Sync.me && v.by === Sync.me.id) ? null : v.c;
+  if (revEdge[ei]){                               // already have it (union): still let the finder's colour stick
+    if (col && edgeColor[ei] !== col){ edgeColor[ei] = col; fogDirty = true; if (live){ save(); draw(); } }
+    return;
+  }
+  applyingRemote = true; remoteColor = col;
   const ok = reveal(ei, !live);                   // live remote finds animate; history replays silently
   applyingRemote = false; remoteColor = null;
   if (!ok) return;
