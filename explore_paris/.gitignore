@@ -12,5 +12,8 @@ paris_raw.json
 arr_raw.json
 plaza_raw.json
 
+# Paris Open Data quartier boundaries (build_areas.py input; re-fetched if absent)
+quartiers.geojson
+
 # Foglamp publish metadata (scan.lock.json contains the private edit token)
 .foglamp/

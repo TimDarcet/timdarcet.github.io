@@ -21,29 +21,34 @@ const Sync = (() => {
   let supa = null, code = null, me = null, loading = null;
   let dbChan = null, presChan = null, roster = {};
   let onFoundCb = () => {}, onRosterCb = () => {}, onSyncedCb = () => {};
+  let generation = 0, historySerial = Promise.resolve(), cancelPendingJoin = null;
+  const HISTORY_PAGE = 500;
 
-  // Outbox: rows whose upsert failed (offline / transient error) are stashed here and retried on
-  // (re)connect and on "online", so a dropped push never silently loses a discovery for peers.
-  let outbox = [];
-  const loadOutbox = () => { try { outbox = JSON.parse(localStorage.getItem("paris-outbox") || "[]"); } catch(e){ outbox = []; } };
-  const saveOutbox = () => { try { localStorage.setItem("paris-outbox", JSON.stringify(outbox)); } catch(e){} };
-  async function send(rows){                         // upsert rows; on any failure, keep them for a later retry
-    if (!supa || !rows.length) return false;
-    try {
-      for (let i = 0; i < rows.length; i += 500){
-        const { error } = await supa.from("found").upsert(rows.slice(i, i + 500), { onConflict: "room,key", ignoreDuplicates: true });
-        if (error) throw error;
-      }
-      return true;
-    } catch(e){
-      outbox.push(...rows); if (outbox.length > 5000) outbox = outbox.slice(-5000); saveOutbox();
-      return false;
-    }
+  // Outbox: a durable, deduped queue of pushes. Rows are persisted BEFORE any network attempt and
+  // dropped only once the server acks them, so nothing is lost to a tab-close mid-send, and a street
+  // queued twice collapses to one entry. Drained on (re)connect and on "online".
+  let outbox = new Map();                            // "room|key" -> row
+  let flushing = false;
+  const okey = r => r.room + "|" + r.key;
+  const saveOutbox = () => { try { localStorage.setItem("paris-outbox", JSON.stringify([...outbox.values()])); } catch(e){} };
+  const loadOutbox = () => { try { outbox = new Map((JSON.parse(localStorage.getItem("paris-outbox") || "[]")).map(r => [okey(r), r])); } catch(e){ outbox = new Map(); } };
+  function queue(rows){                              // durably record rows (deduped) before we try to send them
+    for (const r of rows) outbox.set(okey(r), r);
+    if (outbox.size > 5000) outbox = new Map([...outbox].slice(-5000));
+    saveOutbox();
   }
-  async function flush(){                            // drain the outbox (rows carry their own room); failures re-queue via send()
-    if (!supa || !outbox.length) return;
-    const rows = outbox; outbox = []; saveOutbox();
-    await send(rows);
+  async function flush(){                            // upsert queued rows in chunks; drop only what the server confirms
+    if (!supa || flushing || !outbox.size) return;
+    flushing = true;
+    try {
+      while (outbox.size){                            // re-read each round so rows queued mid-flush are included
+        const chunk = [...outbox.values()].slice(0, 500);
+        const { error } = await supa.from("found").upsert(chunk, { onConflict: "room,key", ignoreDuplicates: true });
+        if (error) throw error;
+        for (const r of chunk) outbox.delete(okey(r));  // ack: these are safely on the server now
+        saveOutbox();
+      }
+    } catch(e){} finally { flushing = false; }
   }
 
   const available = () => !!(CONFIG.url && CONFIG.key);
@@ -61,24 +66,88 @@ const Sync = (() => {
     if (!loading) loading = script(LIB)
       .then(() => { supa = window.supabase.createClient(CONFIG.url, CONFIG.key, { realtime: { params: { eventsPerSecond: 20 } } });
                     loadOutbox(); addEventListener("online", flush); return true; })
-      .catch(() => false);
+      .catch(() => { loading = null; return false; });
     return loading;
   }
   const rowToFound = r => ({ n: r.name, la: r.la, lo: r.lo, by: r.by, c: r.color });
 
+  const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+  async function readHistoryOnce(room, epoch){
+    let after = null;
+    while (epoch === generation && code === room){
+      let q = supa.from("found")
+        .select("key,name,la,lo,by,color")
+        .eq("room", room)
+        .order("key", { ascending: true })
+        .limit(HISTORY_PAGE);
+      if (after !== null) q = q.gt("key", after);
+      const { data, error } = await q;
+      if (error) throw error;
+      if (epoch !== generation || code !== room) return false;
+      const batch = data || [];
+      if (!batch.length) return true;
+      for (const r of batch) onFoundCb(rowToFound(r), false);
+      after = batch[batch.length - 1].key;
+    }
+    return false;
+  }
+  async function readHistory(room, epoch){
+    let lastError;
+    for (let attempt = 0; attempt < 3; attempt++){
+      try { return await readHistoryOnce(room, epoch); }
+      catch(e){
+        lastError = e;
+        if (epoch !== generation || code !== room) return false;
+        if (attempt < 2) await sleep(500 * Math.pow(2, attempt));
+      }
+    }
+    throw lastError;
+  }
+  function reconcile(room, epoch){
+    historySerial = historySerial.catch(() => {}).then(() => readHistory(room, epoch));
+    return historySerial;
+  }
+
   async function join(roomCode, name){
     if (!await init()) return false;
     if (code) leave();
-    code = roomCode.toUpperCase();
-    me = { id: id(), name: (name || "Explorer").slice(0, 24), color: COLORS[Math.abs(h32(id())) % COLORS.length] };
+    const room = String(roomCode || "").trim().toUpperCase();
+    if (!/^[A-Z0-9]{1,12}$/.test(room)) return false;
+    const epoch = ++generation;
+    historySerial = Promise.resolve();
+    code = room;
+    me = { id: id(), name: String(name || "Explorer").slice(0, 24), color: COLORS[Math.abs(h32(id())) % COLORS.length] };
     localStorage.setItem("paris-room", JSON.stringify({ code, name: me.name }));
 
-    // live discoveries: subscribe BEFORE the history read so nothing inserted in between is missed
-    // (duplicates are harmless — the game unions and skips already-revealed streets).
+    let readyDone = false, readyResolve;
+    const ready = new Promise(resolve => { readyResolve = resolve; });
+    const settleReady = ok => {
+      if (readyDone) return;
+      readyDone = true;
+      clearTimeout(readyTimer);
+      if (cancelPendingJoin === cancel) cancelPendingJoin = null;
+      readyResolve(ok);
+    };
+    const cancel = () => settleReady(false);
+    cancelPendingJoin = cancel;
+    const readyTimer = setTimeout(() => settleReady(false), 30000);
+
+    // Reconcile only after Realtime confirms the subscription. Re-run the ordered, paginated
+    // history read on every reconnect; duplicates are harmless because the game stores a union.
     dbChan = supa.channel("db:" + code)
       .on("postgres_changes", { event: "INSERT", schema: "public", table: "found", filter: "room=eq." + code },
           p => onFoundCb(rowToFound(p.new), true))
-      .subscribe(status => { if (status === "SUBSCRIBED") flush(); });   // retry any pushes that failed offline
+      .subscribe(status => {
+        if (epoch !== generation) return;
+        if (status === "SUBSCRIBED"){
+          flush();
+          reconcile(room, epoch)
+            .then(ok => { if (ok && epoch === generation){ onSyncedCb(); settleReady(true); } })
+            .catch(() => settleReady(false));
+        } else if (["CHANNEL_ERROR", "TIMED_OUT", "CLOSED"].includes(status) && !readyDone){
+          settleReady(false);
+        }
+      });
 
     // roster via Realtime Presence — auto-drops a player when their tab closes
     roster = {};
@@ -90,26 +159,27 @@ const Sync = (() => {
     });
     presChan.subscribe(status => { if (status === "SUBSCRIBED") presChan.track({ name: me.name, color: me.color }); });
 
-    // history: pull the room's existing union, reveal it silently, then signal "synced"
-    const { data } = await supa.from("found").select("name,la,lo,by,color").eq("room", code);
-    (data || []).forEach(r => onFoundCb(rowToFound(r), false));
-    onSyncedCb();
-    return true;
+    if (await ready) return true;
+    if (epoch === generation) leave();
+    return false;
   }
   function row(n, la, lo){ return { room: code, key: key(n, la, lo), name: n, la, lo, by: me.id, color: me.color }; }
   function pushOne(n, la, lo){                      // a live local discovery; on-conflict-do-nothing keeps the first finder
     if (!code || !supa) return;
-    send([row(n, la, lo)]);                         // retried from the outbox if it fails
+    queue([row(n, la, lo)]); flush();               // persisted first, so it survives a failed send
   }
   async function pushMany(list){                    // seed our existing progress on join
     if (!code || !supa || !list.length) return;
-    await send(list.map(([n, la, lo]) => row(n, la, lo)));
+    queue(list.map(([n, la, lo]) => row(n, la, lo)));
+    await flush();
   }
-  function leave(){
+  function leave(keepSaved){                         // keepSaved: tear down the live channels but remember the room
+    generation++;
+    if (cancelPendingJoin){ const cancel = cancelPendingJoin; cancelPendingJoin = null; cancel(); }
     try { if (dbChan) supa.removeChannel(dbChan); } catch(e){}
     try { if (presChan) supa.removeChannel(presChan); } catch(e){}
     dbChan = presChan = code = null; roster = {};
-    localStorage.removeItem("paris-room");
+    if (!keepSaved) localStorage.removeItem("paris-room");
   }
   function saved(){ try { return JSON.parse(localStorage.getItem("paris-room")); } catch(e){ return null; } }
 

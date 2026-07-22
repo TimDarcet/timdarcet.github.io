@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>Paris Memory — Streets</title>
 <link rel="manifest" href="manifest.webmanifest">
 <meta name="theme-color" content="#1a73e8">
@@ -13,10 +13,11 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,700&display=swap" rel="stylesheet">
 <style>
+  :root { --hud-height: 96px; }
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html, body { height: 100%; height: 100dvh; overflow: hidden; background: #e9edf2;
                font-family: ui-sans-serif, system-ui, "Segoe UI", Roboto, sans-serif; }
-  #map { position: absolute; inset: 0; z-index: 0; background: #e9edf2; }
+  #map { position: absolute; inset: 0; background: #e9edf2; }
   #fog { position: absolute; inset: 0; z-index: 400; pointer-events: none; }
   /* depth: soft inner shadow so the fogged map feels recessed under the clear areas */
   #vignette { position: absolute; inset: 0; z-index: 401; pointer-events: none;
@@ -27,6 +28,10 @@
   #fx { position: absolute; inset: 0; z-index: 590; pointer-events: none; display: none; }
   .leaflet-container { background: #e9edf2; }
   .leaflet-control-attribution { font-size: 10px; background: rgba(255,255,255,.7); }
+  .leaflet-control-container .leaflet-top,
+  .leaflet-control-container .leaflet-bottom { z-index: 450; }
+  .leaflet-top.leaflet-left { top: calc(38px + env(safe-area-inset-top)); }
+  .leaflet-bottom.leaflet-left { bottom: calc(var(--hud-height) + 22px); }
   #hud { position: fixed; left: 0; right: 0; bottom: 0; z-index: 500;
          padding: 12px 14px calc(12px + env(safe-area-inset-bottom));
          background: linear-gradient(to top, rgba(20,28,40,.55), rgba(20,28,40,.18) 60%, transparent);
@@ -52,7 +57,10 @@
   #msg.bad { color: #c5221f; border: 1px solid #ea4335; }
   #title { position: fixed; left: 14px; top: 12px; z-index: 500; color: #fff; font-size: 13px; letter-spacing: 1px;
            text-shadow: 0 1px 4px rgba(0,0,0,.7); background: rgba(20,28,40,.45); padding: 5px 10px; border-radius: 8px; }
-  #debug { position: fixed; left: 14px; top: 46px; z-index: 550; display: none; max-height: 60vh; overflow-y: auto;
+  #version { position: fixed; left: 10px; bottom: calc(var(--hud-height) + 6px); z-index: 500;
+             color: rgba(255,255,255,.82); background: rgba(20,28,40,.5); border-radius: 5px;
+             padding: 2px 5px; font: 10px ui-monospace, monospace; text-shadow: 0 1px 2px rgba(0,0,0,.6); }
+  #debug { position: fixed; left: 52px; top: 46px; z-index: 550; display: none; max-height: 60vh; overflow-y: auto;
            width: 260px; background: rgba(20,28,40,.92); color: #dde6f2; border: 1px solid #4b5f7a; border-radius: 8px;
            padding: 8px 10px; font-size: 12px; font-family: ui-monospace, monospace; box-shadow: 0 4px 14px rgba(0,0,0,.4); }
   #debug .dh { font-weight: 700; color: #c4b5fd; margin-bottom: 4px; font-family: ui-sans-serif, system-ui; }
@@ -66,18 +74,34 @@
   #edgepanel label span { width: 72px; color: #9fb2c9; }
   #edgepanel input[type=range] { flex: 1; }
   #edgepanel .v { width: 40px; text-align: right; color: #eaf2ff; font-variant-numeric: tabular-nums; }
-  /* per-arrondissement progress: a drawer, hidden until toggled via the ▤ chip */
-  #arr { position: fixed; right: 12px; top: 54px; z-index: 555; width: 190px; max-height: 72vh; overflow-y: auto;
-         background: rgba(20,28,40,.94); color: #dde6f2; border: 1px solid #3a4a60; border-radius: 10px;
-         padding: 10px 12px; font-size: 11px; font-family: ui-sans-serif, system-ui; box-shadow: 0 8px 24px rgba(0,0,0,.4);
-         transform: translateX(120%); opacity: 0; pointer-events: none; transition: transform .22s ease, opacity .22s; }
-  #arr.open { transform: translateX(0); opacity: 1; pointer-events: auto; }
-  #arr .ah { font-weight: 700; color: #cfe0f5; margin-bottom: 6px; letter-spacing: .3px; }
-  #arr .arow { display: flex; align-items: center; gap: 6px; margin: 2px 0; font-variant-numeric: tabular-nums; }
-  #arr .al { width: 24px; color: #9fb2c9; text-align: right; }
-  #arr .abar { flex: 1; height: 7px; background: rgba(255,255,255,.08); border-radius: 4px; overflow: hidden; }
+  /* unified right sidebar: recent finds + per-arrondissement progress. Slides in via the ▤ chip;
+     open by default on desktop, folded on mobile. */
+  #side { position: fixed; right: 12px; top: 54px; z-index: 555; width: 210px; max-height: calc(100vh - 260px);
+          overflow-y: auto; background: rgba(20,28,40,.94); color: #dde6f2; border: 1px solid #3a4a60; border-radius: 10px;
+          padding: 10px 12px; font-size: 11px; font-family: ui-sans-serif, system-ui; box-shadow: 0 8px 24px rgba(0,0,0,.4);
+          transform: translateX(120%); opacity: 0; pointer-events: none; transition: transform .22s ease, opacity .22s; }
+  #side.open { transform: translateX(0); opacity: 1; pointer-events: auto; }
+  #side .ah { font-weight: 700; color: #cfe0f5; margin: 0 0 6px; letter-spacing: .3px; }
+  #hist { margin-bottom: 12px; }
+  #hist .hrow { display: flex; align-items: center; gap: 7px; width: 100%; text-align: left; background: none; border: 0;
+                border-radius: 6px; padding: 4px 5px; margin: 1px 0; color: #dde6f2; font: inherit; cursor: pointer; }
+  #hist .hrow:hover { background: rgba(255,255,255,.09); }
+  #hist .hdot { width: 9px; height: 9px; border-radius: 50%; flex: none; box-shadow: 0 0 0 1px rgba(0,0,0,.3); }
+  #hist .hn { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #hist .hnum { color: #9fb2c9; font-variant-numeric: tabular-nums; flex: none; }
+  #hist .hempty { color: #8394a8; font-style: italic; padding: 2px 5px; }
+  #side .gtabs { display: flex; gap: 4px; margin-bottom: 9px; }
+  #side .gtab { flex: 1; background: rgba(255,255,255,.06); border: 1px solid #3a4a60; color: #9fb2c9;
+                border-radius: 7px; padding: 5px 2px; font: inherit; font-size: 10.5px; cursor: pointer; }
+  #side .gtab:hover { color: #dde6f2; }
+  #side .gtab.active { background: #1a73e8; border-color: #1a73e8; color: #fff; font-weight: 700; }
+  #arr { margin-bottom: 12px; }
+  #arr .arow { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 2px 6px; margin: 4px 0;
+               font-variant-numeric: tabular-nums; }
+  #arr .al { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #cfe0f5; }
+  #arr .ap { text-align: right; color: #eaf2ff; }
+  #arr .abar { grid-column: 1 / -1; height: 6px; background: rgba(255,255,255,.08); border-radius: 4px; overflow: hidden; }
   #arr .abar span { display: block; height: 100%; background: linear-gradient(90deg,#1a73e8,#4aa3ff); border-radius: 4px; }
-  #arr .ap { width: 30px; text-align: right; color: #eaf2ff; }
   #arrBtn.on { background: #1a73e8; color: #fff; border-color: #1a73e8; }
   /* room panel: always-visible code + peers + a box to merge another room. Bottom-right, above the HUD */
   /* room panel: drawn directly on the map (no box), bottom-right above the HUD */
@@ -86,7 +110,7 @@
           text-shadow: 0 1px 3px rgba(255,255,255,.9), 0 0 2px rgba(255,255,255,.9); }
   #room .rhdr { display: flex; align-items: center; gap: 6px; justify-content: flex-end; }
   #room .code { font-family: ui-monospace, monospace; font-weight: 700; font-size: 14px; letter-spacing: .5px;
-                cursor: pointer; color: #12325f; }
+                cursor: pointer; color: #12325f; background: transparent; border: 0; padding: 0; }
   #room .code:hover { color: #1a73e8; }
   #room .rcount { color: #46566b; font-variant-numeric: tabular-nums; }
   #room .me { display: flex; align-items: center; gap: 6px; margin-top: 5px; justify-content: flex-end; }
@@ -98,7 +122,8 @@
   #room .me input:hover { border-color: #cdd6e0; }
   #room .me input:focus { background: #fff; border-color: #1a73e8; text-shadow: none; }
   #room .peers { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 5px; justify-content: flex-end; }
-  #room .peers i { width: 10px; height: 10px; border-radius: 50%; display: inline-block; box-shadow: 0 0 0 1px rgba(0,0,0,.25); cursor: pointer; }
+  #room .peers .peer { width: 10px; height: 10px; border: 0; padding: 0; border-radius: 50%; display: inline-block;
+                       box-shadow: 0 0 0 1px rgba(0,0,0,.25); cursor: pointer; }
   #room .merge { margin-top: 6px; }
   #room .merge input { width: 100%; background: rgba(255,255,255,.85); border: 1px solid #cdd6e0; border-radius: 7px;
                        padding: 6px 8px; font-size: 12px; color: #1f2a37; outline: none; text-align: right; text-shadow: none; }
@@ -149,6 +174,9 @@
   #modal .credit a { color: #1a73e8; }
   #loading { position: fixed; inset: 0; z-index: 700; display: flex; align-items: center; justify-content: center;
              color: #46566b; font-size: 16px; background: #e9edf2; }
+  .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden;
+             clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
+  button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 3px solid rgba(26,115,232,.45); outline-offset: 2px; }
   /* mobile: tighten HUD, shrink chips, keep everything clear of the map controls & notch */
   @media (max-width: 620px){
     #stats { gap: 10px 12px; font-size: 11.5px; }
@@ -162,12 +190,13 @@
     #timer { top: calc(48px + env(safe-area-inset-top)); font-size: 17px; }
     #modal { padding: 18px; border-radius: 14px; }
     #modal h2 { font-size: 20px; }
+    #side { top: calc(46px + env(safe-area-inset-top)); width: min(210px, 64vw); }
   }
 </style>
 </head>
 <body>
-<div id="map"></div>
-<canvas id="fog"></canvas>
+<div id="map" role="region" aria-label="Interactive map of Paris"></div>
+<canvas id="fog" aria-hidden="true"></canvas>
 <div id="grain"></div>
 <div id="vignette"></div>
 <svg width="0" height="0" style="position:absolute"><defs>
@@ -179,38 +208,50 @@
   </filter>
 </defs></svg>
 <div id="title"><b>PARIS</b> · <span id="subtitle">rue par rue</span></div>
+<div id="version" aria-label="Game version"></div>
 <div id="topright">
-  <button id="arrBtn" class="chip" title="Progress by arrondissement">▤</button>
-  <button id="langBtn" class="chip" title="Language">FR</button>
-  <button id="rulesBtn" class="chip" title="How to play">?</button>
-  <button id="dailyBtn" class="chip" title="Daily challenge">◷</button>
-  <button id="fbBtn" class="chip" title="Feedback">✎</button>
+  <button id="arrBtn" class="chip" title="Progress by arrondissement" aria-label="Progress by arrondissement" aria-expanded="false">▤</button>
+  <button id="langBtn" class="chip" title="Language" aria-label="Language">FR</button>
+  <button id="rulesBtn" class="chip" title="How to play" aria-label="How to play">?</button>
+  <button id="dailyBtn" class="chip" title="Daily challenge" aria-label="Daily challenge">◷</button>
+  <button id="fbBtn" class="chip" title="Feedback" aria-label="Feedback">✎</button>
 </div>
-<div id="timer"></div>
+<div id="timer" role="timer"></div>
 <div id="room"></div>
 <div id="debug"></div>
 <div id="edgepanel"></div>
-<div id="arr"></div>
-<div id="msg"></div>
+<aside id="side" aria-label="Progress and recent finds">
+  <div id="arr"></div>
+  <div id="hist"></div>
+</aside>
+<div id="msg" role="status" aria-live="polite"></div>
 <div id="hud">
   <div id="stats"></div>
   <div id="entry">
     <input id="guess" type="text" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false"
-           placeholder="Name a street touching a revealed junction…">
-    <button id="recenter" title="Recenter on discoveries">⌖</button>
-    <button id="reset" title="Reset progress">↺</button>
+           aria-label="Street name" placeholder="Name a street touching a revealed junction…">
+    <button id="recenter" title="Recenter on discoveries" aria-label="Recenter on discoveries">⌖</button>
+    <button id="reset" title="Reset progress" aria-label="Reset progress">↺</button>
   </div>
 </div>
 <!-- modal overlay (rules / daily / result / feedback) -->
-<div id="overlay"><div id="modal"></div></div>
-<div id="toast"></div>
-<canvas id="fx"></canvas>
-<div id="loading">Loading map of Paris…</div>
+<div id="overlay"><div id="modal" role="dialog" aria-modal="true" tabindex="-1"></div></div>
+<div id="toast" role="status" aria-live="polite"></div>
+<canvas id="fx" aria-hidden="true"></canvas>
+<div id="loading" role="status">Loading map of Paris…</div>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="paris.js"></script>
 <script src="match.js"></script>
 <script src="sync.js"></script>
 <script>
+const APP_VERSION = "v8";
+document.getElementById("version").textContent = APP_VERSION;
+const hudEl = document.getElementById("hud");
+function syncHudHeight(){ document.documentElement.style.setProperty("--hud-height", hudEl.offsetHeight + "px"); }
+if (window.ResizeObserver) new ResizeObserver(syncHudHeight).observe(hudEl);
+else window.addEventListener("resize", syncHudHeight);
+requestAnimationFrame(syncHudHeight);
+
 const D = window.PARIS, NODES = D.nodes, EDGES = D.edges;
 const TOTAL_KM = EDGES.reduce((s,e)=>s+e.k, 0);
 
@@ -221,8 +262,12 @@ const I18N = {
     placeholder: "Name a street touching a glowing junction…",
     recenter: "Recenter on discoveries", reset: "Reset progress",
     lang: "Français", rules: "How to play", feedback: "Feedback",
+    mapLabel: "Interactive map of Paris", versionLabel: "Game version",
     streets: "streets", km: "km", area: "km²", reachable: "reachable now",
     streak: "streak", byArr: "By arrondissement", dayStreak: "day streak",
+    recent: "Recent finds", recentEmpty: "Streets you find will appear here", panel: "Progress & recent finds",
+    gArr: "Arr.", gQua: "Quartier", gRive: "Bank",
+    riveDroite: "Right bank", riveGauche: "Left bank", iles: "Islands",
     ok: n=>"✓ "+n,
     notAdjacent: "So close — that street isn't touching your explored area yet",
     oneOff: `Almost — check your spelling and try again`,
@@ -262,8 +307,12 @@ const I18N = {
     placeholder: "Nommez une rue touchant un carrefour lumineux…",
     recenter: "Recentrer sur les découvertes", reset: "Réinitialiser",
     lang: "English", rules: "Règles du jeu", feedback: "Votre avis",
+    mapLabel: "Carte interactive de Paris", versionLabel: "Version du jeu",
     streets: "rues", km: "km", area: "km²", reachable: "accessibles",
     streak: "série", byArr: "Par arrondissement", dayStreak: "jours d'affilée",
+    recent: "Découvertes récentes", recentEmpty: "Les rues trouvées s'afficheront ici", panel: "Progression & découvertes",
+    gArr: "Arr.", gQua: "Quartier", gRive: "Rive",
+    riveDroite: "Rive droite", riveGauche: "Rive gauche", iles: "Îles",
     ok: n=>"✓ "+n,
     notAdjacent: "Presque — cette rue ne touche pas encore votre zone explorée",
     oneOff: `Tout près — vérifiez l'orthographe et réessayez`,
@@ -341,11 +390,76 @@ EDGES.forEach(e=>{ const k=ai(e); arrTotKm[k]+=e.k; arrTotN[k]++; });
 FACES.forEach(f=>{ const k=(f.a>=0&&f.a<NB)?f.a:NB; arrTotArea[k]+=f.m||0; });
 
 const SAVE_KEY = "paris-streets-progress";
+const DEBUG_HIDE_KEY = "paris-debug-hidden";
+const debugHidden = new Set();
 let daily = false;                               // daily-mode flag (no persistence)
 // signature of the current dataset: changes whenever edges are added/removed/renamed/reordered —
 // exactly when saved edge indices stop being valid. Lets us detect (and heal) saves after a rebuild.
 const DATA_VERSION = (()=>{ let h=EDGES.length; for(const e of EDGES) for(let i=0;i<e.n.length;i++) h=(h*31+e.n.charCodeAt(i))|0; return h; })();
 const edgePoint = ei => { const p=EDGES[ei].p[0]; return p[(p.length/2)|0]; };   // representative point
+// ---- area granularities for the progress panel: arrondissement / quartier / rive ----------------
+// Rive is derived: every arrondissement sits entirely on one bank except the two islands, which we
+// detect geometrically (rings lifted from the IGN Seine water surface). Quartier is optional data
+// (each edge's `q` index + D.qua labels), baked by build_areas.py — its tab appears only when present.
+const ISLANDS = [                                // Île de la Cité, Île Saint-Louis (buffered rings, [lat,lon])
+  [[48.8578,2.33903],[48.85518,2.35096],[48.85148,2.35294],[48.85469,2.34309]],
+  [[48.85315,2.3528],[48.85407,2.35323],[48.8518,2.35992],[48.84932,2.36064],[48.85133,2.35385]],
+];
+const RIVE_GAUCHE = new Set([5,6,7,13,14,15]);   // left-bank arrondissement numbers; all others right bank
+function pointInRing(lat, lon, ring){            // ray-casting point-in-polygon
+  let inside = false;
+  for (let i=0,j=ring.length-1;i<ring.length;j=i++){
+    const yi=ring[i][0], xi=ring[i][1], yj=ring[j][0], xj=ring[j][1];
+    if (((yi>lat)!==(yj>lat)) && (lon < (xj-xi)*(lat-yi)/(yj-yi)+xi)) inside = !inside;
+  }
+  return inside;
+}
+function riveOf(ei){                              // 0 = right bank, 1 = left bank, 2 = islands, -1 = unassigned
+  const a = EDGES[ei].a; if (a<0 || a>=ARR.length) return -1;
+  const p = edgePoint(ei);
+  for (const r of ISLANDS) if (pointInRing(p[0], p[1], r)) return 2;
+  return RIVE_GAUCHE.has(parseInt(ARR[a],10)) ? 1 : 0;
+}
+const hasQuartiers = () => Array.isArray(D.qua) && D.qua.length > 0 && EDGES[0] && EDGES[0].q !== undefined;
+let granIdx = 0;                                  // selected granularity (index into granList())
+function granList(){                              // built fresh so labels track the language; order: arr, quartier, rive
+  const g = [{ key:"arr", tab:t("gArr"), labels: ARR, group: ei => { const a=EDGES[ei].a; return (a>=0&&a<ARR.length)?a:-1; } }];
+  if (hasQuartiers()) g.push({ key:"qua", tab:t("gQua"), labels: D.qua, group: ei => { const q=EDGES[ei].q; return (q>=0&&q<D.qua.length)?q:-1; } });
+  g.push({ key:"riv", tab:t("gRive"), labels: [t("riveDroite"), t("riveGauche"), t("iles")], group: riveOf });
+  return g;
+}
+const granTotCache = {};                          // per-granularity total km per group (denominators), computed once
+function granTotals(gran){
+  if (granTotCache[gran.key]) return granTotCache[gran.key];
+  const tot = new Float64Array(gran.labels.length);
+  for (let ei=0; ei<EDGES.length; ei++){ const gi=gran.group(ei); if (gi>=0 && gi<tot.length) tot[gi]+=EDGES[ei].k; }
+  return granTotCache[gran.key] = tot;
+}
+// hovering a progress row outlines its region: the convex hull of that group's streets (cached per
+// group). A hull blob shows WHERE the area is without exposing individual unrevealed streets.
+let hoverArea = null;                             // {key, gi} of the hovered row, or null
+const hullCache = {};
+function convexHull(pts){                          // monotone chain; pts and result are [lat,lon]
+  if (pts.length < 3) return pts.slice();
+  const P = pts.map(p=>({x:p[1], y:p[0], p})).sort((a,b)=> a.x-b.x || a.y-b.y);
+  const cross = (o,a,b)=> (a.x-o.x)*(b.y-o.y)-(a.y-o.y)*(b.x-o.x), h=[];
+  for (const q of P){ while (h.length>=2 && cross(h[h.length-2],h[h.length-1],q)<=0) h.pop(); h.push(q); }
+  const lower = h.length+1;
+  for (let i=P.length-2;i>=0;i--){ const q=P[i]; while (h.length>=lower && cross(h[h.length-2],h[h.length-1],q)<=0) h.pop(); h.push(q); }
+  h.pop(); return h.map(o=>o.p);
+}
+function areaHull(key, gi){
+  const ck = key+":"+gi; if (hullCache[ck]) return hullCache[ck];
+  const gran = granList().find(g=>g.key===key); if (!gran) return hullCache[ck]=[];
+  const pts=[]; for (let ei=0; ei<EDGES.length; ei++) if (gran.group(ei)===gi){ const p=edgePoint(ei); pts.push([p[0],p[1]]); }
+  return hullCache[ck] = convexHull(pts);
+}
+function areaPolys(key, gi){                        // exact baked boundary (array of [lat,lon] rings); hull if absent
+  const src = key==="arr" ? D.arrPoly : key==="qua" ? D.quaPoly : key==="riv" ? D.rivPoly : null;
+  const p = src && src[gi];
+  if (p && p.length) return p;
+  const hull = areaHull(key, gi); return hull.length>=3 ? [hull] : [];
+}
 const edgesByName = new Map();                   // name -> edge indices, for healing by identity
 EDGES.forEach((e,i)=>{ const a=edgesByName.get(e.n); if(a) a.push(i); else edgesByName.set(e.n,[i]); });
 // Same-name merge: sections sharing an exact name AND coming within 250m are one street, revealed
@@ -382,6 +496,26 @@ function resolveStreet(name, lat, lon){
   for (const ei of c){ const p=edgePoint(ei), d=(p[0]-lat)**2+(p[1]-lon)**2; if(d<bd){bd=d;best=ei;} }
   return best;
 }
+function persistDebugHidden(){
+  if (daily) return;
+  const s = [...debugHidden].map(ei=>{ const p=edgePoint(ei); return [EDGES[ei].n,p[0],p[1]]; });
+  try { localStorage.setItem(DEBUG_HIDE_KEY, JSON.stringify({v:DATA_VERSION,s})); } catch(e){}
+}
+function setDebugHidden(ei, hidden){
+  for (const k of nameGroup[ei] || [ei]){
+    if (hidden) debugHidden.add(k); else debugHidden.delete(k);
+  }
+  persistDebugHidden();
+}
+function loadDebugHidden(){
+  try {
+    const x=JSON.parse(localStorage.getItem(DEBUG_HIDE_KEY) || "null");
+    for (const [nm,la,lo] of (x && x.s) || []){
+      const ei=resolveStreet(nm,la,lo); if(ei>=0) for(const k of nameGroup[ei] || [ei]) debugHidden.add(k);
+    }
+  } catch(e){}
+}
+loadDebugHidden();
 function save(){
   if (daily) return;
   // store street IDENTITY (name + representative point) + finder colour, not raw indices, so a future
@@ -411,13 +545,16 @@ function restoreSave(x){
 let dayStreak = 1;
 function updateDayStreak(){
   try {
-    const today = new Date(); today.setHours(0,0,0,0); const t = today.getTime();
+    const dayKey = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+    const today = new Date(); today.setHours(0,0,0,0);
+    const yesterday = new Date(today); yesterday.setDate(yesterday.getDate()-1);
+    const todayKey = dayKey(today), yesterdayKey = dayKey(yesterday);
     const s = JSON.parse(localStorage.getItem("paris-daystreak") || "null");
-    if (s && s.last === t){ dayStreak = s.n; return; }        // already counted today
-    const oneDay = 864e5;
-    if (s && s.last === t - oneDay) dayStreak = s.n + 1;       // played yesterday -> extend
+    const lastKey = s && typeof s.last === "number" ? dayKey(new Date(s.last)) : s && s.last;
+    if (s && lastKey === todayKey){ dayStreak = s.n; return; }  // already counted today
+    if (s && lastKey === yesterdayKey) dayStreak = s.n + 1;     // played yesterday -> extend
     else dayStreak = 1;                                        // missed a day (or first ever) -> reset
-    localStorage.setItem("paris-daystreak", JSON.stringify({ last: t, n: dayStreak }));
+    localStorage.setItem("paris-daystreak", JSON.stringify({ last: todayKey, n: dayStreak }));
   } catch(e){ dayStreak = 1; }
 }
 
@@ -459,6 +596,10 @@ function checkFaces(ei, replay){                  // reveal any block whose boun
   return filled;
 }
 function reveal(ei, replay){
+  if (debugHidden.has(ei)){
+    if (replay || applyingRemote) return false;
+    setDebugHidden(ei, false);                     // an explicit local reveal overrides a debug hide
+  }
   if (revEdge[ei]) return false;
   revEdge[ei] = 1; revList.push(ei); revEdgeCount++; revKm += EDGES[ei].k;
   const k = ai(EDGES[ei]); arrKm[k]+=EDGES[ei].k; arrCntN[k]++;
@@ -480,6 +621,7 @@ function reveal(ei, replay){
   if (!replay){
     flashEdge = ei; flashT = 1; save();
     anim.push({type:"edge", ei, t:0});           // draw-on animation
+    anim.push({type:"hl", ei, t:0});             // lingering gold highlight so a new find stands out for a bit
     sound(EDGES[ei].k, filled ? 40000 : 0, filled>0);
     if (!animRunning) { animRunning = true; requestAnimationFrame(animLoop); }
   }
@@ -690,6 +832,14 @@ function growViewToEdge(ei){                       // keep the current view, exp
   const merged = map.getBounds().extend(nb);
   tweenTo(merged.getCenter(), zoomForBounds(merged, 80, map.getZoom()), 500);
 }
+function highlightEdge(ei){ anim.push({type:"hl", ei, t:0}); if(!animRunning){ animRunning=true; requestAnimationFrame(animLoop); } }
+function goToEdge(ei){                             // from the recent-finds list: fly to a street and highlight it
+  follow = false;
+  const bb = edgeBounds(ei);
+  tweenTo(bb.getCenter(), Math.min(zoomForBounds(bb, 140, 17), 17), 650);
+  highlightEdge(ei);
+  if (MOBILE) setSide(false);                     // on phones, close the drawer so the map is visible
+}
 
 // ---- render fog + reveal overlay -----------------------------------------
 function strokePathsG(g, ei){                      // add this edge's polylines to context g's path
@@ -815,12 +965,40 @@ function draw(){
       ctx.lineWidth = brush*0.7;
       ctx.beginPath(); strokePaths(A.ei); ctx.stroke();
       ctx.restore();
+    } else if (A.type === "hl"){
+      // lingering highlight after a find (or when picked from the recent-finds list): a gold glow shimmering out
+      if (!onScreen(PX.eb[A.ei])) continue;
+      const fade = 1-A.t, pulse = 0.55 + 0.45*Math.sin(A.t*Math.PI*3);
+      ctx.save();
+      ctx.filter = `blur(${(brush*2.6).toFixed(1)}px)`;
+      ctx.strokeStyle = `rgba(255,201,92,${0.7*fade})`;
+      ctx.lineWidth = brush*1.1;
+      ctx.beginPath(); strokePaths(A.ei); ctx.stroke();
+      ctx.restore();
+      ctx.strokeStyle = `rgba(255,228,150,${0.85*fade*pulse})`;
+      ctx.lineWidth = brush*0.5;
+      ctx.beginPath(); strokePaths(A.ei); ctx.stroke();
     }
   }
   // flash the newest reveal (kept for the persistent post-anim tint)
   if (flashT>0 && flashEdge>=0){
     ctx.strokeStyle = `rgba(234,67,53,${flashT*0.6})`; ctx.lineWidth = brush*0.55;
     ctx.beginPath(); strokePaths(flashEdge); ctx.stroke();
+  }
+
+  // hovering a progress-panel row: outline that arrondissement / quartier / bank region
+  if (hoverArea){
+    const polys = areaPolys(hoverArea.key, hoverArea.gi);
+    if (polys.length){
+      ctx.save(); ctx.beginPath();
+      for (const ring of polys){
+        for (let i=0;i<ring.length;i++){ const q = proj(ring[i][0], ring[i][1]); i ? ctx.lineTo(q.x,q.y) : ctx.moveTo(q.x,q.y); }
+        ctx.closePath();
+      }
+      ctx.fillStyle = "rgba(26,115,232,0.14)"; ctx.fill();
+      ctx.setLineDash([7,5]); ctx.strokeStyle = "rgba(26,115,232,0.9)"; ctx.lineWidth = 2; ctx.stroke();
+      ctx.setLineDash([]); ctx.restore();
+    }
   }
 
   // 4b. debug: highlight the reveal-area under the cursor + outline its bounding streets
@@ -916,23 +1094,50 @@ function tweenStats(){
 function updateStats(instant){
   if (instant){ disp.streets=revEdgeCount; disp.km=revKm; disp.area=revArea; renderStats(); }
   else if (!statsRAF) statsRAF = requestAnimationFrame(tweenStats);
-  updateArrPanel();
+  const side = document.getElementById("side"), btn = document.getElementById("arrBtn");
+  if (daily || !ARR.length){                     // daily / no data: hide the whole sidebar + its chip
+    if (side){ side.classList.remove("open"); side.style.display="none"; }
+    if (btn) btn.style.display="none";
+  } else {
+    if (side) side.style.display="";
+    if (btn) btn.style.display="";
+    renderAreaStats(); renderHistory();
+  }
   if (debug) updateDebugPanel();               // keep the hovered-area checklist fresh after a reveal
 }
-// per-arrondissement progress panel (sorted by % streets revealed, descending). Visibility is
-// controlled by the ▤ toggle (.open class); this only fills the content.
-function updateArrPanel(){
+const escHtml = s => s.replace(/[&<>]/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
+// recent finds, newest first, one row per distinct street name; click flies to it and highlights it
+function renderHistory(){
+  const box = document.getElementById("hist"); if (!box) return;
+  const seen = new Set(), rows = [];
+  for (let i=revList.length-1; i>=0 && rows.length<40; i--){
+    const ei = revList[i]; if (seen.has(EDGES[ei].n)) continue; seen.add(EDGES[ei].n); rows.push(ei);
+  }
+  box.innerHTML = `<div class="ah">${t("recent")}</div>` + (rows.length
+    ? rows.map(ei=>{
+        const lab = ARR[ai(EDGES[ei])] || "", nm = escHtml(EDGES[ei].n);
+        return `<button class="hrow" data-ei="${ei}" title="${nm}">`+
+               `<i class="hdot" style="background:${edgeColor[ei]||"#9fb2c9"}"></i>`+
+               `<span class="hn">${nm}</span>`+
+               (lab?`<span class="hnum">${lab}${/^\d+$/.test(lab)?"e":""}</span>`:"")+
+               `</button>`;
+      }).join("")
+    : `<div class="hempty">${t("recentEmpty")}</div>`);
+}
+// area-progress panel: a granularity toggle (arr / quartier / rive) above bars sorted by % revealed km
+function renderAreaStats(){
   const el = document.getElementById("arr");
-  const btn = document.getElementById("arrBtn");
-  if (!ARR.length || daily){ el.classList.remove("open"); if(btn) btn.style.display="none"; return; }
-  if (btn) btn.style.display="";
-  const rows = ARR.map((lab,k)=>({lab, pct: arrTotKm[k]? arrKm[k]/arrTotKm[k] : 0}))
-                  .sort((a,b)=> b.pct-a.pct);
-  el.innerHTML = `<div class="ah">${t("byArr")}</div>` + rows.map(r=>{
-    const p = (100*r.pct).toFixed(0), done = r.pct>=0.999;
-    return `<div class="arow"><span class="al">${r.lab}${/^\d+$/.test(r.lab)?"e":""}</span>`+
-           `<span class="abar"><span style="width:${p}%"></span></span>`+
-           `<span class="ap">${done?"✓":p+"%"}</span></div>`;
+  const grans = granList(); if (granIdx >= grans.length) granIdx = 0;
+  const gran = grans[granIdx], tot = granTotals(gran);
+  const rev = new Float64Array(gran.labels.length);
+  for (const ei of revList){ const gi=gran.group(ei); if (gi>=0 && gi<rev.length) rev[gi]+=EDGES[ei].k; }
+  const rows = gran.labels.map((lab,k)=>({lab, gi:k, pct: tot[k]? rev[k]/tot[k] : 0, has: tot[k]>0}))
+                  .filter(r=>r.has).sort((a,b)=> b.pct-a.pct);
+  const tabs = grans.map((g,i)=>`<button class="gtab${i===granIdx?" active":""}" data-g="${i}">${g.tab}</button>`).join("");
+  el.innerHTML = `<div class="gtabs">${tabs}</div>` + rows.map(r=>{
+    const p = (100*r.pct).toFixed(0), done = r.pct>=0.999, lab = /^\d+$/.test(r.lab) ? r.lab+"e" : r.lab;
+    return `<div class="arow" data-gi="${r.gi}"><span class="al">${escHtml(lab)}</span><span class="ap">${done?"✓":p+"%"}</span>`+
+           `<span class="abar"><span style="width:${p}%"></span></span></div>`;
   }).join("");
 }
 
@@ -1002,6 +1207,7 @@ function confStep(){
   else { confRAF = 0; fxc.style.display="none"; }
 }
 function submitGuess(){
+  if (daily && dailyEnded) return;
   const inp = document.getElementById("guess");
   const raw = inp.value.trim();
   inp.value="";
@@ -1120,8 +1326,12 @@ function onMouseMove(e){
 }
 function toggleDebug(){
   debug = !debug;
-  document.getElementById("title").innerHTML = debug ? "<b>PARIS</b> · debug mode (D)" : "<b>PARIS</b> · rue par rue";
+  updateTitle();
   if (!debug){ hoverFace = -1; }
+  if (map){
+    if (debug) map.on("contextmenu", onMapContextMenu);
+    else map.off("contextmenu", onMapContextMenu);
+  }
   const ep = document.getElementById("edgepanel");
   ep.style.display = debug ? "block" : "none";
   if (debug) buildEdgePanel();
@@ -1167,7 +1377,8 @@ function buildEdgePanel(){
   });
 }
 window.addEventListener("keydown", e=>{
-  if (e.key==="d" && e.target.tagName!=="INPUT"){ toggleDebug(); }
+  const tag = e.target && e.target.tagName;
+  if (e.key==="d" && !["INPUT","TEXTAREA","SELECT"].includes(tag) && !e.metaKey && !e.ctrlKey && !e.altKey){ toggleDebug(); }
 });
 
 // ---- click two revealed nodes to reveal the street joining exactly those two --
@@ -1181,7 +1392,39 @@ function nodeAt(px, py){                          // nearest selectable (not-ful
   }
   return best;
 }
+function debugUnreveal(ei){
+  setDebugHidden(ei, true);
+  const removed = new Set(nameGroup[ei] || [ei]);
+  const keep = revList.filter(k => !removed.has(k)).map(k => [k, edgeColor[k]]);
+  revEdge.fill(0); revNode.fill(0); revFace.fill(0); edgeColor.fill(null);
+  revList.length=0; faceList.length=0; anim.length=0; frontier.clear();
+  revEdgeCount=0; revKm=0; revArea=0; arrKm.fill(0); arrArea.fill(0); arrCntN.fill(0);
+  flashEdge=-1; flashT=0; selNode=-1; streak=0;
+  for (const [k,col] of keep){ reveal(k, true); if (col) edgeColor[k]=col; }
+  lastPctMilestone = 100*revEdgeCount/EDGES.length;
+  celebratedArr.clear();
+  for (let k=0;k<NB;k++) if (arrTotKm[k]>0 && arrKm[k]/arrTotKm[k]>=0.999) celebratedArr.add(k);
+  fogDirty=true; save(); updateStats(true); draw();
+  flash("− " + EDGES[ei].n, true);
+}
+function onMapContextMenu(e){
+  if (!debug || (daily && dailyEnded)) return;
+  if (e.originalEvent) L.DomEvent.preventDefault(e.originalEvent);
+  const ei = edgeAt(e.containerPoint.x, e.containerPoint.y);
+  if (ei < 0) return;
+  if (!revEdge[ei]){ flash(t("noMatch"), false); return; }
+  debugUnreveal(ei);
+}
 function onMapClick(e){
+  if (daily && dailyEnded) return;
+  if (debug){
+    const ei = edgeAt(e.containerPoint.x, e.containerPoint.y);
+    if (ei >= 0){
+      if (revEdge[ei]) flash(t("alreadyThere"), true);
+      else { reveal(ei); updateStats(); draw(); flash(t("ok")(EDGES[ei].n), true); }
+      return;
+    }
+  }
   const ni = nodeAt(e.containerPoint.x, e.containerPoint.y);
   if (ni < 0){ selNode = -1; draw(); return; }
   if (selNode < 0){ selNode = ni; draw(); return; }
@@ -1202,7 +1445,7 @@ function onMapClick(e){
 // ---- animation loop: advances reveal draw-on / fill anims + flash ---------
 let animRunning = false;
 function animLoop(){
-  for (const A of anim) A.t = Math.min(1, A.t + (A.type==="locate" ? 0.02 : 0.06));   // locate: one quick glow (~0.8s)
+  for (const A of anim) A.t = Math.min(1, A.t + (A.type==="hl" ? 0.012 : A.type==="locate" ? 0.02 : 0.06));   // hl: ~1.4s, locate: ~0.8s
   for (let i=anim.length-1;i>=0;i--) if (anim[i].t>=1) anim.splice(i,1);
   if (flashT>0) flashT = Math.max(0, flashT-0.03);
   draw();
@@ -1221,13 +1464,14 @@ function nearestEdge(lat, lon){
 }
 function begin(lat, lon){
   const el=document.getElementById("loading"); if(el) el.remove();
-  map = L.map("map", { zoomControl:false, attributionControl:true, zoomAnimation:false, fadeAnimation:false,
+  map = L.map("map", { zoomControl:false, attributionControl:false, zoomAnimation:false, fadeAnimation:false,
                        zoomSnap:0, minZoom:11, maxZoom:19, center:[48.8566,2.3522], zoom:13 });
+  map.attributionControl = L.control.attribution({ position:"bottomleft" }).addTo(map);
   L.tileLayer("https://{s}.basemaps.cartocdn.com/rastertiles/voyager_nolabels/{z}/{x}/{y}{r}.png", {
     subdomains:"abcd", detectRetina:true, maxZoom:20,
     attribution:'&copy; OpenStreetMap &copy; CARTO'
   }).addTo(map);
-  L.control.zoom({ position:"topright" }).addTo(map);
+  L.control.zoom({ position:"topleft" }).addTo(map);
   precompute();                                    // bake world-pixel geometry + bboxes once
   resize();
   map.on("move zoom viewreset", ()=>{ fogDirty=true; draw(); });
@@ -1236,6 +1480,7 @@ function begin(lat, lon){
   map.on("zoomstart", ()=>{ dragging=true; });
   map.on("zoomend", ()=>{ dragging=false; fogDirty=true; draw(); });
   map.on("click", onMapClick);
+  if (debug) map.on("contextmenu", onMapContextMenu);
   map.on("mousemove", onMouseMove);
   map.on("mouseout", ()=>{ if(hoverEdge>=0||hoverFace>=0){ hoverEdge=-1; hoverFace=-1; hoverXY=null; draw(); updateDebugPanel(); } });
   map.on("resize", ()=>{ resize(); draw(); if(follow) fitRevealed(); });   // fires when the map container changes size (mobile URL bar, rotate)
@@ -1255,6 +1500,7 @@ function begin(lat, lon){
   lastPctMilestone = 100*revEdgeCount/EDGES.length;
   for (let k=0;k<NB;k++) if (arrTotKm[k]>0 && arrKm[k]/arrTotKm[k]>=0.999) celebratedArr.add(k);
   updateStats(true);                              // instant (no count-up from zero on load)
+  setSide(!MOBILE);                               // sidebar open on desktop, folded by default on phones
   map.whenReady(()=>{ resize(); fitRevealed(); draw(); });
   setTimeout(()=>{ resize(); draw(); }, 300);
   document.getElementById("guess").focus();
@@ -1283,6 +1529,7 @@ function resetGame(){
   if (!confirm(LANG==="fr"?"Réinitialiser toute la progression ?":"Reset all progress and start over?")) return;
   Sync.leave();                                    // leaving clears the saved room, so reload makes a fresh code
   try { localStorage.removeItem(SAVE_KEY); } catch(e){}
+  try { localStorage.removeItem(DEBUG_HIDE_KEY); } catch(e){}
   try { history.replaceState(null, "", location.pathname); } catch(e){}  // drop any #room= invite so we don't rejoin it
   location.reload();
 }
@@ -1290,32 +1537,64 @@ function resetGame(){
 // ---- language -------------------------------------------------------------
 function applyLang(){
   document.documentElement.lang = LANG;
-  document.getElementById("subtitle").textContent = t("subtitle");
-  document.getElementById("guess").placeholder = t("placeholder");
-  document.getElementById("recenter").title = t("recenter");
-  document.getElementById("reset").title = t("reset");
+  updateTitle();
+  document.getElementById("map").setAttribute("aria-label", t("mapLabel"));
+  document.getElementById("version").setAttribute("aria-label", `${t("versionLabel")} ${APP_VERSION}`);
+  const label = (id, value) => { const el=document.getElementById(id); el.title=value; el.setAttribute("aria-label", value); };
+  const guess = document.getElementById("guess");
+  guess.placeholder = t("placeholder"); guess.setAttribute("aria-label", t("placeholder"));
+  label("recenter", t("recenter"));
+  label("reset", t("reset"));
   document.getElementById("langBtn").textContent = LANG==="fr" ? "EN" : "FR";
-  document.getElementById("rulesBtn").title = t("rules");
-  document.getElementById("fbBtn").title = t("feedback");
+  label("langBtn", t("lang"));
+  label("rulesBtn", t("rules"));
+  label("dailyBtn", t("daily"));
+  label("arrBtn", t("panel"));
+  label("fbBtn", t("feedback"));
   const mc = document.getElementById("mergeCode");
   if (mc){ mc.placeholder = t("mergePlaceholder");
-           document.getElementById("roomCode").title = t("copyInvite");
-           document.getElementById("meName").placeholder = t("yourName"); }
+           mc.setAttribute("aria-label", t("mergePlaceholder"));
+           const roomCode=document.getElementById("roomCode"); roomCode.title = t("copyInvite");
+           roomCode.setAttribute("aria-label", t("copyInvite"));
+           const meName=document.getElementById("meName"); meName.placeholder = t("yourName");
+           meName.setAttribute("aria-label", t("yourName")); }
   if (map) updateStats();
 }
+function updateTitle(){ document.getElementById("subtitle").textContent = debug ? t("debugMode") : t("subtitle"); }
 
 // ---- modal system ---------------------------------------------------------
 const overlay = document.getElementById("overlay"), modal = document.getElementById("modal");
 let modalLocked = false;                          // when true, clicking the backdrop won't close it
-function showModal(html, locked){ modal.innerHTML = html; overlay.style.display = "flex"; modalLocked = !!locked; }
-function closeModal(){ overlay.style.display = "none"; modalLocked = false; }
+let modalReturnFocus = null;
+const modalFocusables = () => [...modal.querySelectorAll('button:not([disabled]), input:not([disabled]), textarea:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])')];
+function showModal(html, locked){
+  modalReturnFocus = document.activeElement;
+  modal.innerHTML = html; overlay.style.display = "flex"; modalLocked = !!locked;
+  const heading = modal.querySelector("h2");
+  if (heading){ heading.id = "modalTitle"; modal.setAttribute("aria-labelledby", heading.id); }
+  else modal.removeAttribute("aria-labelledby");
+  requestAnimationFrame(()=> (modalFocusables()[0] || modal).focus());
+}
+function closeModal(){
+  overlay.style.display = "none"; modalLocked = false;
+  const target = modalReturnFocus; modalReturnFocus = null;
+  if (target && target.isConnected && typeof target.focus === "function") target.focus();
+}
 overlay.addEventListener("click", e=>{ if(e.target===overlay && !modalLocked) closeModal(); });
+overlay.addEventListener("keydown", e=>{
+  if (e.key !== "Tab") return;
+  const items = modalFocusables();
+  if (!items.length){ e.preventDefault(); modal.focus(); return; }
+  const first=items[0], last=items[items.length-1];
+  if (e.shiftKey && document.activeElement===first){ e.preventDefault(); last.focus(); }
+  else if (!e.shiftKey && document.activeElement===last){ e.preventDefault(); first.focus(); }
+});
 
 function showRules(onClose){
   showModal(`<h2>${t("rulesTitle")}</h2>`+
     t("rulesBody").map(p=>`<p>${p}</p>`).join("")+
     `<button class="primary" id="rStart">${t("rulesStart")}</button>`+
-    `<p class="credit">${t("credit")}</p>`);
+    `<p class="credit">${t("credit")}</p>`, true);
   document.getElementById("rStart").onclick = ()=>{ closeModal(); if (typeof onClose==="function") onClose(); };
 }
 
@@ -1339,7 +1618,7 @@ function showStartChooser(done){
 
 // ---- daily 5-minute mode --------------------------------------------------
 const DAY_MS = 5*60*1000;
-let timerEnd = 0, timerIv = null, dailyStreets = 0, dailyKm = 0;
+let timerEnd = 0, timerIv = null, dailyStreets = 0, dailyKm = 0, dailyEnded = false;
 function todaySeed(){ const d=new Date(); return d.getUTCFullYear()*10000 + (d.getUTCMonth()+1)*100 + d.getUTCDate(); }
 function seededEdge(seed){                        // deterministic start street from a seed
   let x = (seed*2654435761) % EDGES.length; if (x<0) x+=EDGES.length;
@@ -1355,16 +1634,18 @@ function showDaily(){
 }
 function startDaily(){
   closeModal();
-  Sync.leave();                                   // daily is solo: leave the room and hide its panel
+  Sync.leave(true);                               // daily is solo: drop live channels but KEEP the room so exit rejoins it
   document.getElementById("room").style.display = "none";
   edgeColor.fill(null);
-  daily = true; streak=0; bestStreak=0;
+  debugHidden.clear();                             // daily is isolated; persisted free-play overrides remain on disk
+  daily = true; dailyEnded=false; streak=0; bestStreak=0;
+  document.getElementById("guess").disabled = false;
   // wipe current state
   revEdge.fill(0); revNode.fill(0); revFace.fill(0);
   revList.length=0; faceList.length=0; anim.length=0; frontier.clear();
   revEdgeCount=0; revKm=0; revArea=0; arrKm.fill(0); arrArea.fill(0); arrCntN.fill(0);
   lastPctMilestone=0; celebratedArr.clear(); disp.streets=0; disp.km=0; disp.area=0;
-  document.getElementById("arr").style.display="none";
+  setSide(false);                                 // daily is solo: fold the sidebar (updateStats keeps it hidden)
   const seed = todaySeed();
   reveal(seededEdge(seed), true);
   dailyStreets = revEdgeCount; dailyKm = revKm;
@@ -1383,6 +1664,9 @@ function tickTimer(){
   if (left <= 0){ clearInterval(timerIv); endDaily(); }
 }
 function endDaily(){
+  if (dailyEnded) return;
+  dailyEnded = true;
+  document.getElementById("guess").disabled = true;
   document.getElementById("timer").style.display="none";
   const streets = revEdgeCount, km = revKm, area = revArea;
   const grid = shareGrid(streets, km);
@@ -1395,7 +1679,7 @@ function endDaily(){
     `</div>`+
     `<div class="share">${grid}</div>`+
     `<button class="primary" id="shareBtn">${t("share")}</button>`+
-    `<button class="ghost" id="freeBtn">${t("playFree")}</button>`);
+    `<button class="ghost" id="freeBtn">${t("playFree")}</button>`, true);
   const link = location.origin+location.pathname+"#daily";
   const text = `${t("result")(new Date().toISOString().slice(0,10))}\n${grid}\n${streets} ${t("streets")} · ${km.toFixed(1)} ${t("km")}\n${link}`;
   document.getElementById("shareBtn").onclick = ()=>{
@@ -1414,8 +1698,8 @@ function showFeedback(){
   const FR = LANG==="fr";
   showModal(`<h2>${t("feedback")}</h2>`+
     `<p>${FR?"Un bug, une idée, un mot ? Dites-moi tout.":"A bug, an idea, a kind word? Tell me anything."}</p>`+
-    `<textarea id="fbText" placeholder="${FR?"Votre message…":"Your message…"}"></textarea>`+
-    `<input id="fbContact" placeholder="${FR?"Email (optionnel)":"Email (optional)"}">`+
+    `<textarea id="fbText" aria-label="${FR?"Votre message":"Your message"}" placeholder="${FR?"Votre message…":"Your message…"}"></textarea>`+
+    `<input id="fbContact" aria-label="${FR?"Email optionnel":"Optional email"}" placeholder="${FR?"Email (optionnel)":"Email (optional)"}">`+
     `<button class="primary" id="fbSend">${FR?"Envoyer":"Send"}</button>`);
   document.getElementById("fbSend").onclick = ()=>{
     const msg = document.getElementById("fbText").value.trim();
@@ -1446,6 +1730,7 @@ function applyRemoteFound(v, live){                // v = {n, la, lo, by, c}; li
   if (daily) return;                              // daily is solo: never take remote reveals onto its board
   const ei = resolveStreet(v.n, v.la, v.lo);
   if (ei < 0) return;                             // unknown here
+  if (debugHidden.has(ei)) return;                // local debug overrides win over grow-only room history
   const col = (Sync.me && v.by === Sync.me.id) ? null : v.c;
   if (revEdge[ei]){                               // already have it (union): still let the finder's colour stick
     if (col && edgeColor[ei] !== col){ edgeColor[ei] = col; fogDirty = true; if (live){ save(); draw(); } }
@@ -1466,11 +1751,11 @@ function buildRoomPanel(){
   const el = document.getElementById("room");
   if (el.dataset.built) return; el.dataset.built = "1";
   el.innerHTML =
-    `<div class="rhdr"><span class="code" id="roomCode" title="${t("copyInvite")}"></span>`+
+    `<div class="rhdr"><button type="button" class="code" id="roomCode" title="${t("copyInvite")}" aria-label="${t("copyInvite")}"></button>`+
     `<span class="rcount" id="roomCount"></span></div>`+
-    `<form class="me" id="meForm"><i id="meDot"></i><input id="meName" maxlength="24" enterkeyhint="done" placeholder="${t("yourName")}"></form>`+
+    `<form class="me" id="meForm"><i id="meDot" aria-hidden="true"></i><input id="meName" maxlength="24" enterkeyhint="done" aria-label="${t("yourName")}" placeholder="${t("yourName")}"></form>`+
     `<div class="peers" id="roomPeers"></div>`+
-    `<form class="merge" id="mergeForm"><input id="mergeCode" enterkeyhint="go" placeholder="${t("mergePlaceholder")}" autocapitalize="characters" autocomplete="off"></form>`;
+    `<form class="merge" id="mergeForm"><input id="mergeCode" enterkeyhint="go" aria-label="${t("mergePlaceholder")}" placeholder="${t("mergePlaceholder")}" autocapitalize="characters" autocomplete="off"></form>`;
   document.getElementById("roomCode").onclick = copyInvite;
   const nameInp = document.getElementById("meName");
   nameInp.value = lastName;
@@ -1497,10 +1782,17 @@ function renderRoster(players, me){                // only refresh the code + pe
   document.getElementById("roomCount").textContent = ps.length > 1 ? `${ps.length} 👥` : "";
   // peer dots exclude yourself (your name is shown in the editable field above); name on hover/tap
   const peers = document.getElementById("roomPeers");
-  peers.innerHTML =
-    Object.entries(roster).filter(([id]) => !Sync.me || id !== Sync.me.id)
-      .map(([id,p]) => `<i style="background:${p.color}" title="${(p.name||"").replace(/"/g,"&quot;")}" data-nm="${(p.name||"").replace(/"/g,"&quot;")}"></i>`).join("");
-  peers.onclick = e => { const nm = e.target.dataset && e.target.dataset.nm; if (nm) flash(nm, true); };  // tap = show name (no hover on touch)
+  peers.replaceChildren();
+  for (const [id,p] of Object.entries(roster)){
+    if (Sync.me && id === Sync.me.id) continue;
+    const peer = p && typeof p === "object" ? p : {};
+    const nm = typeof peer.name === "string" ? peer.name.slice(0,24) : "Explorer";
+    const color = typeof peer.color === "string" && /^#[0-9a-fA-F]{6}$/.test(peer.color) ? peer.color : "#64748b";
+    const dot = document.createElement("button");
+    dot.type="button"; dot.className="peer"; dot.style.backgroundColor=color;
+    dot.title=nm; dot.setAttribute("aria-label", nm); dot.onclick=()=>flash(nm, true);
+    peers.appendChild(dot);
+  }
 }
 function copyInvite(){
   if (!Sync.code) return;
@@ -1529,10 +1821,26 @@ document.getElementById("langBtn").addEventListener("click", ()=> setLang(LANG==
 document.getElementById("rulesBtn").addEventListener("click", showRules);
 document.getElementById("dailyBtn").addEventListener("click", showDaily);
 document.getElementById("fbBtn").addEventListener("click", showFeedback);
-document.getElementById("arrBtn").addEventListener("click", ()=>{
-  const open = document.getElementById("arr").classList.toggle("open");
-  document.getElementById("arrBtn").classList.toggle("on", open);
+function setSide(open){                            // show/hide the unified right sidebar and sync the ▤ chip
+  document.getElementById("side").classList.toggle("open", open);
+  const b=document.getElementById("arrBtn"); b.classList.toggle("on", open); b.setAttribute("aria-expanded", String(open));
+}
+document.getElementById("arrBtn").addEventListener("click", ()=> setSide(!document.getElementById("side").classList.contains("open")));
+document.getElementById("hist").addEventListener("click", e=>{
+  const b = e.target.closest(".hrow"); if (b) goToEdge(+b.dataset.ei);
 });
+const arrEl = document.getElementById("arr");
+arrEl.addEventListener("click", e=>{               // granularity toggle: arr / quartier / rive
+  const tab = e.target.closest(".gtab"); if (tab){ granIdx = +tab.dataset.g; hoverArea = null; renderAreaStats(); draw(); }
+});
+arrEl.addEventListener("mouseover", e=>{           // hovering a row outlines its region on the map
+  const row = e.target.closest(".arow");
+  const key = (granList()[granIdx] || {}).key || "";
+  const next = row ? { key, gi: +row.dataset.gi } : null;
+  const changed = (!!next !== !!hoverArea) || (next && (next.gi !== hoverArea.gi || next.key !== hoverArea.key));
+  if (changed){ hoverArea = next; draw(); }
+});
+arrEl.addEventListener("mouseleave", ()=>{ if (hoverArea){ hoverArea = null; draw(); } });
 window.addEventListener("keydown", e=>{ if(e.key==="Escape" && !modalLocked) closeModal(); });
 
 function boot(){

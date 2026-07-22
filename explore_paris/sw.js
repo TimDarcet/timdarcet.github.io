@@ -1,5 +1,6 @@
 // Service worker: offline app shell + runtime tile cache. Bump CACHE to invalidate on deploy.
-const CACHE = "paris-v7";
+const CACHE = "paris-v8";
+const CACHE_PREFIX = "paris-";
 const SHELL = [
   "./",
   "./index.html",
@@ -17,7 +18,7 @@ self.addEventListener("install", e => {
 });
 self.addEventListener("activate", e => {
   e.waitUntil(
-    caches.keys().then(ks => Promise.all(ks.filter(k => k !== CACHE).map(k => caches.delete(k))))
+    caches.keys().then(ks => Promise.all(ks.filter(k => k.startsWith(CACHE_PREFIX) && k !== CACHE).map(k => caches.delete(k))))
       .then(() => self.clients.claim())
   );
 });
