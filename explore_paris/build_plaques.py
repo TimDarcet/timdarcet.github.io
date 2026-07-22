@@ -8,7 +8,7 @@ window.PLAQUES = [{la, lo, t: title, r: text, a: address, ei: nearest edge index
   * r   – transcriptions are mostly SHOUTED IN CAPS on the real plaques; recase the predominantly
           uppercase ones to sentence case (one capital per sentence). Already-mixed text is left as-is.
 Raw API response is cached to plaques_raw.json so re-runs need no network."""
-import json, sys, os, urllib.request
+import json, sys, os, re, unicodedata, urllib.request
 from shapely import STRtree
 from shapely.geometry import Point, LineString, MultiLineString
 
@@ -27,6 +27,28 @@ def coord(x):
     if isinstance(gp, dict) and gp.get("lat") is not None: return float(gp["lat"]), float(gp["lon"])
     if x.get("y_4326") and x.get("x_4326"): return float(x["y_4326"]), float(x["x_4326"])
     return None
+
+def _ooxml(m):                                    # OOXML "_xXXXX_" escape -> its CP1252 char (0x8E->Ž, 0x9E->ž, ...)
+    cp = int(m.group(1), 16)
+    if 0x80 <= cp <= 0xFF:
+        try:
+            ch = bytes([cp]).decode("cp1252")
+            if ch.isprintable(): return ch
+        except Exception: pass
+    return " "
+
+def _bracket(m):                                  # transcriber's note: keep "[italique : real text]", drop the rest
+    inner = m.group(1).strip()
+    mi = re.match(r"(?i)italique\s*:\s*(.*)", inner)
+    return " " + mi.group(1) + " " if mi else " "
+
+def clean(s):                                     # scrub transcription artifacts to plain, flowing text
+    s = unicodedata.normalize("NFC", s or "")     # compose stray combining accents (e + ´ -> é)
+    s = re.sub(r"_x([0-9A-Fa-f]{4})_", _ooxml, s)
+    s = re.sub(r"\[([^\]]*)\]", _bracket, s)
+    s = re.sub(r"[|│/_*<>±\[\]]", " ", s)         # line-break & separator glyphs, plus any unmatched note brackets
+    s = "".join(" " if unicodedata.category(c) == "Cc" else c for c in s)  # stray control chars (e.g. \x90)
+    return " ".join(s.split())
 
 def recap(s):                                     # SHOUTING CAPS -> sentence case; leave already-mixed text alone
     letters = [c for c in s if c.isalpha()]
@@ -54,13 +76,12 @@ def main():
     for x in recs:
         c = coord(x)
         if not c: continue
-        t = (x.get("titre") or "").strip()
-        # "/" on the plaques marks a line break; the display wraps text itself, so flatten to spaces
-        r = " ".join(recap((x.get("retranscription") or "").strip()).replace("/", " ").split())
+        t = clean(x.get("titre") or "")
+        r = recap(clean(x.get("retranscription") or ""))   # clean artifacts, then de-shout
         if not (t or r): continue
         ei = int(tree.nearest(Point(c[1], c[0])))
         out.append({"la": round(c[0], 5), "lo": round(c[1], 5), "t": t, "r": r,
-                    "a": (x.get("adresse") or "").strip(), "ei": ei})
+                    "a": clean(x.get("adresse") or ""), "ei": ei})
     with open(OUT, "w", encoding="utf-8") as f:
         f.write("window.PLAQUES="); json.dump(out, f, ensure_ascii=False, separators=(",", ":"))
     print(f"wrote {len(out)}/{len(recs)} plaques to {OUT}", file=sys.stderr)

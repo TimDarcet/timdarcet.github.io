@@ -1,6 +1,6 @@
 {
-  "name": "Paris — rue par rue",
-  "short_name": "Paris rue par rue",
+  "name": "exp.lore.paris",
+  "short_name": "exp.lore.paris",
   "description": "Reveal the streets of Paris from memory, under a fog of war.",
   "start_url": "./",
   "scope": "./",

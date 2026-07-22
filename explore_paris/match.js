@@ -38,8 +38,9 @@ function roman(r){ let n=0,p=0; for(let i=r.length-1;i>=0;i--){ const v=RVAL[r[i
 // "V/11","X/13". Assumes superscripts already expanded and accents stripped; run before lowercasing.
 function deRoman(s){ return s.replace(/\b[IVX]+(er|re)?\b(?!\/)/g,
   (m,suf)=> " "+(suf?frOrd(roman(m.slice(0,-suf.length))):roman(m))+" "); }
-// strip=true (default) peels the leading street-type + connectors; strip=false keeps them, so a query
-// can be matched both ways (e.g. "porte jaune" -> "jaune" AND "portejaune", to hit "Rue de la Porte Jaune").
+// strip=true (default) peels the leading street-type + connectors; strip=false keeps them. Each street is
+// keyed BOTH ways (see KEYS), so a single unstripped query matches either the bare name or the full prefixed
+// one (e.g. "porte jaune" or "rue de la porte jaune" both reach "Rue de la Porte Jaune").
 function core(s, strip=true){
   let x = s.replace(SUP_RX,c=>SUP[c])            // expand superscripts (Iᵉʳ -> Ier) BEFORE NFD, which
           .normalize("NFD").replace(/\p{Diacritic}/gu,"")   // would otherwise decompose & drop them

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>Paris Memory — Streets</title>
+<title>exp.lore.paris</title>
 <link rel="manifest" href="manifest.webmanifest">
 <meta name="theme-color" content="#1a73e8">
 <link rel="icon" href="icon.svg" type="image/svg+xml">
@@ -134,7 +134,7 @@
   #room .merge input { width: 100%; background: rgba(255,255,255,.85); border: 1px solid #cdd6e0; border-radius: 7px;
                        padding: 6px 8px; font-size: 12px; color: #1f2a37; outline: none; text-align: right; text-shadow: none; }
   #room .merge input:focus { border-color: #1a73e8; background: #fff; }
-  #title b { font-weight: 700; letter-spacing: 2px; font-family: "Fraunces", Georgia, serif; }
+  #title b { font-weight: 700; letter-spacing: .5px; font-family: "Fraunces", Georgia, serif; }
   #toast { position: fixed; left: 50%; top: 64px; transform: translateX(-50%) translateY(-8px); z-index: 620;
            opacity: 0; transition: opacity .3s, transform .3s; pointer-events: none; white-space: nowrap;
            font-family: "Fraunces", Georgia, serif; font-weight: 700; font-size: 17px; color: #3a2c10;
@@ -213,7 +213,7 @@
     <feGaussianBlur id="fblur" in="disp" stdDeviation="1"/>
   </filter>
 </defs></svg>
-<div id="title"><b>PARIS</b> · <span id="subtitle">rue par rue</span></div>
+<div id="title"><b>exp.lore.paris</b> · <span id="subtitle">rue par rue</span></div>
 <div id="version" aria-label="Game version"></div>
 <div id="topright">
   <button id="arrBtn" class="chip" title="Progress by arrondissement" aria-label="Progress by arrondissement" aria-expanded="false">▤</button>
@@ -289,7 +289,7 @@ const I18N = {
     alreadyThere: "Already explored ✓",
     noPair: "No single street joins just those two junctions",
     blockDone: "Block cleared! ▪",
-    rulesTitle: "Paris, street by street",
+    rulesTitle: "exp.lore.paris",
     rulesBody: [
       "🗺️ The city is under fog. Reveal it street by street from memory.",
       "✏️ Type the name of any street touching a <b>glowing junction</b>, then Enter. Prefixes (rue, boulevard…) and accents are optional; one typo is forgiven.",
@@ -334,7 +334,7 @@ const I18N = {
     alreadyThere: "Déjà exploré ✓",
     noPair: "Aucune rue unique ne relie exactement ces deux carrefours",
     blockDone: "Îlot dévoilé ! ▪",
-    rulesTitle: "Paris, rue par rue",
+    rulesTitle: "exp.lore.paris",
     rulesBody: [
       "🗺️ La ville est sous le brouillard. Dévoilez-la rue par rue, de mémoire.",
       "✏️ Tapez le nom d'une rue touchant un <b>carrefour lumineux</b>, puis Entrée. Les préfixes (rue, boulevard…) et accents sont optionnels ; une faute est tolérée.",
@@ -368,7 +368,7 @@ const t = k => I18N[LANG][k];
 function setLang(l){ LANG=l; localStorage.setItem("paris-lang", l); applyLang(); }
 
 // ---- fuzzy matching (core/lev/STRIP live in match.js) ---------------------
-const CORE = EDGES.map(e=>core(e.n));
+const KEYS = EDGES.map(e=>[...new Set([core(e.n), core(e.n,false)])].filter(k=>k));  // each name keyed with AND without its prefix
 
 // ---- game state -----------------------------------------------------------
 const FACES = D.faces || [];
@@ -1335,16 +1335,17 @@ function submitGuess(){
   const raw = inp.value.trim();
   inp.value="";
   if (raw){ history.push(raw); histPos = history.length; }   // shell-style: ↑ recalls last typed
-  // try the query both stripped and unstripped, so "porte jaune" reaches "Rue de la Porte Jaune"
-  const qs = [...new Set([core(raw), core(raw, false)])].filter(q => q.length >= 2);
-  if (!qs.length) return;
-  const md = c => Math.min(...qs.map(q => lev(q, c)));   // best edit distance across query variants
+  // the query keeps its prefixes; each street is keyed both with and without one (see KEYS), so
+  // "porte jaune" and "rue de la porte jaune" both reach "Rue de la Porte Jaune"
+  const q = core(raw, false);
+  if (q.length < 2) return;
+  const md = ei => Math.min(...KEYS[ei].map(k => lev(q, k)));   // best edit distance across the edge's keys
   const cand = new Set();
   for(const ni of frontier) for(const ei of nodeEdges[ni]) if(!revEdge[ei]) cand.add(ei);
   let best=-1, bestD=1e9;
   for (const ei of cand){
-    const c = CORE[ei]; if(!c) continue;
-    const d = md(c);                           // edit distance against the full stripped name
+    if(!KEYS[ei].length) continue;
+    const d = md(ei);                          // edit distance against the edge's with/without-prefix keys
     if (d < bestD){ bestD=d; best=ei; }
   }
   const tol = 1;                               // accept the exact name plus or minus one typo
@@ -1360,7 +1361,7 @@ function submitGuess(){
       grew = false;
       const reach = new Set();     // current frontier's unrevealed edges
       for (const ni of frontier) for (const ei of nodeEdges[ni]) if (!revEdge[ei]) reach.add(ei);
-      for (const ei of reach) if (!revEdge[ei] && md(CORE[ei])<=tol){ reveal(ei); grew = true; }
+      for (const ei of reach) if (!revEdge[ei] && md(ei)<=tol){ reveal(ei); grew = true; }
     }
     const byName = new Map();      // revealed street name -> segment count
     let bounds = null;             // union of all revealed sections, to grow the view once at the end
@@ -1385,7 +1386,7 @@ function submitGuess(){
     // spot what you meant under the fog (no panning — only segments already on-screen).
     const glow = ei => { anim.push({type:"locate", ei, t:0}); };
     const already = [], hidden = [];
-    for (let i=0;i<CORE.length;i++) if (qs.includes(CORE[i])){ (revEdge[i]?already:hidden).push(i); }
+    for (let i=0;i<KEYS.length;i++) if (KEYS[i].includes(q)){ (revEdge[i]?already:hidden).push(i); }
     for (const ei of already.concat(hidden)) glow(ei);
     if (already.length || hidden.length){
       if (!animRunning){ animRunning = true; requestAnimationFrame(animLoop); }
@@ -1924,7 +1925,7 @@ function showFeedback(){
       method: "POST",
       headers: { "Content-Type": "application/json", "Accept": "application/json" },
       body: JSON.stringify({
-        _subject: "Paris rue par rue — feedback",
+        _subject: "exp.lore.paris — feedback",
         message: msg,
         contact: contact || "(none)",
         agent: navigator.userAgent,
