@@ -18,5 +18,11 @@ quartiers.geojson
 # Paris Open Data commemorative plaques raw API cache (build_plaques.py input; re-fetched if absent)
 plaques_raw.json
 
+# Sucettes "Histoire de Paris" pipeline: raw fetch cache, intermediate stage data, OCR language models
+# (all re-fetchable build inputs; the deployed output sucettes.js IS committed)
+sucettes/cache/
+sucettes/data/
+sucettes/tessdata/
+
 # Foglamp publish metadata (scan.lock.json contains the private edit token)
 .foglamp/
