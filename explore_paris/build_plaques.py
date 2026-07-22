@@ -55,7 +55,8 @@ def main():
         c = coord(x)
         if not c: continue
         t = (x.get("titre") or "").strip()
-        r = recap((x.get("retranscription") or "").strip())
+        # "/" on the plaques marks a line break; the display wraps text itself, so flatten to spaces
+        r = " ".join(recap((x.get("retranscription") or "").strip()).replace("/", " ").split())
         if not (t or r): continue
         ei = int(tree.nearest(Point(c[1], c[0])))
         out.append({"la": round(c[0], 5), "lo": round(c[1], 5), "t": t, "r": r,

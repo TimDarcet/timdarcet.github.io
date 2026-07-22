@@ -23,6 +23,12 @@ plaques_raw.json
 sucettes/cache/
 sucettes/data/
 sucettes/tessdata/
+# ...except the VLM transcriptions: hand-produced by vision, not re-fetchable, so keep them
+!sucettes/data/vlm.json
 
 # Foglamp publish metadata (scan.lock.json contains the private edit token)
 .foglamp/
+
+# temporary sucette shape editor (not part of the deployed game)
+sucette_editor.html
+sucette_shape.json

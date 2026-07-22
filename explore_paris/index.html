@@ -249,6 +249,7 @@
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="paris.js"></script>
 <script src="plaques.js"></script>
+<script src="sucettes.js"></script>
 <script src="match.js"></script>
 <script src="sync.js"></script>
 <script>
@@ -262,6 +263,10 @@ requestAnimationFrame(syncHudHeight);
 
 const D = window.PARIS, NODES = D.nodes, EDGES = D.edges;
 const PLAQUES = window.PLAQUES || [];            // commemorative plaques (opendata.paris.fr): hoverable lore dots
+const SUCETTES = window.SUCETTES || [];          // "Histoire de Paris" Starck panels: pelle-shaped lore markers
+// sucette silhouette from sucette_editor.html — right-half points (x=half-width, y=height, bottom→top), mirrored when drawn
+const SUCETTE_SHAPE = [[0.143,0.002],[0.207,0.106],[0.5,0.321],[0.643,0.437],[0.736,0.57],[0.821,0.753],[0.836,0.954],[0,0.964]];
+const SUCETTE_BAND = 0.85;                        // height fraction of the red "Histoire de Paris" band
 const TOTAL_KM = EDGES.reduce((s,e)=>s+e.k, 0);
 
 // ---- i18n (french / english) ----------------------------------------------
@@ -651,6 +656,7 @@ function reveal(ei, replay){
 let map, W, H, DPR, follow = true, selNode = -1, debug = false, hoverFace = -1, dragging = false;
 let hoverEdge = -1, hoverXY = null;              // revealed street under cursor + cursor pos, for name tooltip
 let hoverPlaque = -1;                            // commemorative plaque under cursor
+let hoverSucette = -1;                           // Histoire-de-Paris panel under cursor
 const cv = document.getElementById("fog"), ctx = cv.getContext("2d");
 const fogLayer = document.createElement("canvas"), fctx = fogLayer.getContext("2d");  // cached fog+streets
 const edgeCv = document.createElement("canvas"), ectx = edgeCv.getContext("2d");      // filtered reveal shape (baked once/rebuild)
@@ -700,7 +706,9 @@ function precompute(){
   });
   const pl = new Float64Array(PLAQUES.length*2);
   for (let i=0;i<PLAQUES.length;i++){ const q=map.project([PLAQUES[i].la, PLAQUES[i].lo], REFZ); pl[2*i]=q.x; pl[2*i+1]=q.y; }
-  PX = { e, eb, n, f, fb, pl };
+  const su = new Float64Array(SUCETTES.length*2);
+  for (let i=0;i<SUCETTES.length;i++){ const q=map.project([SUCETTES[i].la, SUCETTES[i].lo], REFZ); su[2*i]=q.x; su[2*i+1]=q.y; }
+  PX = { e, eb, n, f, fb, pl, su };
 }
 function updateXform(){                            // recompute affine + visible bbox for the current view (2 Leaflet calls)
   const z = map.getZoom();
@@ -943,12 +951,17 @@ function renderFog(){
   }
   fogDirty = false;
 }
+function markerScale(){                             // junction/plaque/sucette markers scale with zoom (clamped), like the ink
+  const mpp = 156543.03392 * Math.cos(map.getCenter().lat*Math.PI/180) / Math.pow(2, map.getZoom());
+  return Math.max(0.5, Math.min(3, (18/mpp)/6));
+}
 function draw(){
   if (!map || !PX) return;
   const z = map.getZoom();
   updateXform();
   const mPerPx = 156543.03392 * Math.cos(map.getCenter().lat*Math.PI/180) / Math.pow(2, z);
   const brush = 18 / mPerPx;                         // ground-invariant unit (18 m in screen px)
+  const ms = markerScale();                          // shared marker scale for this frame
   if (fogDirty) renderFog();                        // rebuild cached fog only when needed
   ctx.setTransform(1,0,0,1,0,0); ctx.clearRect(0,0,cv.width,cv.height);
   ctx.drawImage(fogLayer, 0, 0);                   // blit the cached fog (cheap)
@@ -1036,13 +1049,13 @@ function draw(){
   // 5. junctions: shown only while not fully revealed (a node with an unrevealed
   //    edge). Once all its edges are revealed the node disappears. Click two to
   //    connect them and reveal the street joining exactly those two.
-  const nr = 4;                                  // fixed screen-size marker (UI tap-target, not a ground feature)
+  const nr = 4 * ms;                             // junction marker, scaled with the map
   for (const ni of frontier){
     const x = PX.n[2*ni]*S+Tx, y = PX.n[2*ni+1]*S+Ty;
     if (x<-10||x>W+10||y<-10||y>H+10) continue;
     const sel = (ni===selNode);
     ctx.strokeStyle = sel ? "rgba(26,115,232,1)" : "rgba(245,158,11,0.95)";
-    ctx.lineWidth = sel ? 2.5 : 1.5; ctx.fillStyle = sel ? "rgba(26,115,232,0.25)" : "rgba(255,255,255,0.9)";
+    ctx.lineWidth = (sel ? 2.5 : 1.5) * ms; ctx.fillStyle = sel ? "rgba(26,115,232,0.25)" : "rgba(255,255,255,0.9)";
     ctx.beginPath(); ctx.arc(x,y, sel ? nr*1.6 : nr, 0,7); ctx.fill(); ctx.stroke();
   }
 
@@ -1068,16 +1081,41 @@ function draw(){
       if (i===hoverPlaque || !revEdge[PLAQUES[i].ei]) continue;   // only once its street is revealed
       const px=PX.pl[2*i], py=PX.pl[2*i+1];
       if (px<visMinX||px>visMaxX||py<visMinY||py>visMaxY) continue;
-      const sx=px*S+Tx, sy=py*S+Ty;
-      ctx.moveTo(sx+2.4, sy); ctx.arc(sx, sy, 2.4, 0, 6.2832);
+      const sx=px*S+Tx, sy=py*S+Ty, r=2.4*ms;
+      ctx.moveTo(sx+r, sy); ctx.arc(sx, sy, r, 0, 6.2832);
     }
     ctx.fillStyle="rgba(150,90,40,0.7)"; ctx.fill();
-    ctx.lineWidth=1; ctx.strokeStyle="rgba(255,244,230,0.75)"; ctx.stroke();
+    ctx.lineWidth=ms; ctx.strokeStyle="rgba(255,244,230,0.75)"; ctx.stroke();
     if (hoverPlaque>=0){                             // draw the hovered dot larger, on top
       const sx=PX.pl[2*hoverPlaque]*S+Tx, sy=PX.pl[2*hoverPlaque+1]*S+Ty;
-      ctx.beginPath(); ctx.arc(sx, sy, 5, 0, 6.2832);
-      ctx.fillStyle="#e0a92e"; ctx.fill(); ctx.lineWidth=2; ctx.strokeStyle="#fff"; ctx.stroke();
+      ctx.beginPath(); ctx.arc(sx, sy, 5*ms, 0, 6.2832);
+      ctx.fillStyle="#e0a92e"; ctx.fill(); ctx.lineWidth=2*ms; ctx.strokeStyle="#fff"; ctx.stroke();
     }
+  }
+
+  // 6c-bis. Histoire de Paris panels: a little pelle/"sucette Starck" silhouette (bottom tip at the spot),
+  //         more notable than the plaque dots; hover for the recovered panel text.
+  if (PX.su && SUCETTES.length){
+    const pelle = (sx, sy, sc, hov) => {           // draw the editor silhouette: right-half points then their mirror; bottom at (sx,sy)
+      const H=20*sc, U=5.6*sc, P=SUCETTE_SHAPE;
+      ctx.beginPath(); ctx.moveTo(sx+P[0][0]*U, sy-P[0][1]*H);
+      for (let i=1;i<P.length;i++) ctx.lineTo(sx+P[i][0]*U, sy-P[i][1]*H);          // up the right side to the apex
+      for (let i=P.length-2;i>=0;i--) ctx.lineTo(sx-P[i][0]*U, sy-P[i][1]*H);       // mirror back down the left
+      ctx.closePath();
+      ctx.fillStyle = hov ? "#3a322a" : "#25201b"; ctx.fill();
+      ctx.lineWidth = (hov?1.4:1)*sc; ctx.strokeStyle = hov ? "#ffd98a" : "rgba(232,214,178,0.9)"; ctx.stroke();
+      ctx.strokeStyle="#c0392b"; ctx.lineWidth=1.2*sc;   // red "Histoire de Paris" band
+      const wb=0.62*U*Math.max(...P.map(p=>p[0])), yb=sy-SUCETTE_BAND*H;
+      ctx.beginPath(); ctx.moveTo(sx-wb,yb); ctx.lineTo(sx+wb,yb); ctx.stroke();
+    };
+    const ssc = Math.min(ms, 1.5);                 // cap the sucette's max size at half the other markers' max
+    for (let i=0;i<SUCETTES.length;i++){
+      if (i===hoverSucette || !revEdge[SUCETTES[i].ei]) continue;   // only once its street is revealed
+      const px=PX.su[2*i], py=PX.su[2*i+1];
+      if (px<visMinX||px>visMaxX||py<visMinY||py>visMaxY) continue;
+      pelle(px*S+Tx, py*S+Ty, ssc, false);
+    }
+    if (hoverSucette>=0) pelle(PX.su[2*hoverSucette]*S+Tx, PX.su[2*hoverSucette+1]*S+Ty, ssc*1.4, true);
   }
 
   // 6d. daily route: pulse the goal street; when off-screen, a chevron at the border points to it
@@ -1396,9 +1434,9 @@ function updateDebugPanel(){
   dbgPanel.style.display = "block";
 }
 const plaqueTipEl = document.getElementById("plaqueTip");
-function plaqueAt(x, y){                           // nearest plaque within ~9px of screen point (x,y), else -1
+function plaqueAt(x, y){                           // nearest plaque within the (scaled) dot radius of (x,y), else -1
   if (!PX || !PX.pl) return -1;
-  let best=-1, bd=81;
+  const R=2.4*markerScale()+6; let best=-1, bd=R*R;
   for (let i=0;i<PLAQUES.length;i++){
     if (!revEdge[PLAQUES[i].ei]) continue;         // only hoverable once its street is revealed
     const px=PX.pl[2*i], py=PX.pl[2*i+1];
@@ -1415,10 +1453,29 @@ function positionPlaqueTip(x, y){
   if (by+h>H-6) by=y-h-14; if (by<6) by=6;
   el.style.left=bx+"px"; el.style.top=by+"px";
 }
+function hideTip(){ plaqueTipEl.style.display="none"; }
 function showPlaqueTip(i, x, y){
-  if (i<0){ plaqueTipEl.style.display="none"; return; }
+  if (i<0){ hideTip(); return; }
   const p=PLAQUES[i];
   plaqueTipEl.innerHTML = (p.t?`<b>${escHtml(p.t)}</b>`:"") + escHtml(p.r||"") + (p.a?`<span class="padr">${escHtml(p.a)}</span>`:"");
+  plaqueTipEl.style.display="block"; positionPlaqueTip(x, y);
+}
+function sucetteAt(x, y){                          // Histoire-de-Paris panel whose pelle marker is under the cursor
+  if (!PX || !PX.su) return -1;
+  const ms=Math.min(markerScale(),1.5), hw=5*ms+3, ht=20*ms+2;   // marker: bottom tip at the spot, ~20*ms tall, ~5*ms half-wide
+  for (let i=0;i<SUCETTES.length;i++){
+    if (!revEdge[SUCETTES[i].ei]) continue;        // only hoverable once its street is revealed
+    const px=PX.su[2*i], py=PX.su[2*i+1];
+    if (px<visMinX||px>visMaxX||py<visMinY||py>visMaxY) continue;
+    const sx=px*S+Tx, sy=py*S+Ty;
+    if (x>=sx-hw && x<=sx+hw && y>=sy-ht && y<=sy+3) return i;
+  }
+  return -1;
+}
+function showSucetteTip(i, x, y){
+  if (i<0){ hideTip(); return; }
+  const p=SUCETTES[i];
+  plaqueTipEl.innerHTML = `<b>${escHtml(p.t||"Histoire de Paris")}</b>` + escHtml(p.r||"");
   plaqueTipEl.style.display="block"; positionPlaqueTip(x, y);
 }
 let hoverRAF = 0;
@@ -1429,10 +1486,13 @@ function onMouseMove(e){
   if (he !== hoverEdge){ hoverEdge = he; dirty = true; }
   hoverXY = {x, y};
   if (hoverEdge >= 0) dirty = true;               // reposition tooltip as the cursor moves along a street
-  const hp = plaqueAt(x, y);                       // commemorative plaque under cursor
-  if (hp !== hoverPlaque){ hoverPlaque = hp; dirty = true; showPlaqueTip(hp, x, y); }
-  else if (hp >= 0) positionPlaqueTip(x, y);
-  cv.style.cursor = (hoverEdge >= 0 || hp >= 0) ? "pointer" : "";
+  const hs = sucetteAt(x, y);                      // Histoire-de-Paris panel takes priority over a plaque dot
+  const hp = hs >= 0 ? -1 : plaqueAt(x, y);        // commemorative plaque under cursor
+  if (hs !== hoverSucette || hp !== hoverPlaque){
+    hoverSucette = hs; hoverPlaque = hp; dirty = true;
+    if (hs >= 0) showSucetteTip(hs, x, y); else if (hp >= 0) showPlaqueTip(hp, x, y); else hideTip();
+  } else if (hs >= 0 || hp >= 0) positionPlaqueTip(x, y);
+  cv.style.cursor = (hoverEdge >= 0 || hs >= 0 || hp >= 0) ? "pointer" : "";
   if (debug){
     const f = faceAt(x, y);
     if (f !== hoverFace){ hoverFace = f; dirty = true; updateDebugPanel(); }
@@ -1533,9 +1593,12 @@ function onMapContextMenu(e){
 }
 function onMapClick(e){
   if (daily && dailyEnded) return;
-  const hp = plaqueAt(e.containerPoint.x, e.containerPoint.y);   // tap a plaque dot to read it (touch: no hover)
-  if (hp >= 0){ hoverPlaque = hp; showPlaqueTip(hp, e.containerPoint.x, e.containerPoint.y); draw(); return; }
-  if (hoverPlaque >= 0){ hoverPlaque = -1; showPlaqueTip(-1); draw(); }
+  const cx=e.containerPoint.x, cy=e.containerPoint.y;
+  const hsu = sucetteAt(cx, cy);                                  // tap a marker to read it (touch: no hover)
+  if (hsu >= 0){ hoverSucette = hsu; hoverPlaque = -1; showSucetteTip(hsu, cx, cy); draw(); return; }
+  const hp = plaqueAt(cx, cy);
+  if (hp >= 0){ hoverPlaque = hp; hoverSucette = -1; showPlaqueTip(hp, cx, cy); draw(); return; }
+  if (hoverPlaque >= 0 || hoverSucette >= 0){ hoverPlaque = -1; hoverSucette = -1; hideTip(); draw(); }
   if (debug){
     const ei = edgeAt(e.containerPoint.x, e.containerPoint.y);
     if (ei >= 0){
@@ -1601,7 +1664,7 @@ function begin(lat, lon){
   map.on("click", onMapClick);
   if (debug) map.on("contextmenu", onMapContextMenu);
   map.on("mousemove", onMouseMove);
-  map.on("mouseout", ()=>{ if(hoverEdge>=0||hoverFace>=0||hoverPlaque>=0){ hoverEdge=-1; hoverFace=-1; hoverPlaque=-1; hoverXY=null; showPlaqueTip(-1); draw(); updateDebugPanel(); } });
+  map.on("mouseout", ()=>{ if(hoverEdge>=0||hoverFace>=0||hoverPlaque>=0||hoverSucette>=0){ hoverEdge=-1; hoverFace=-1; hoverPlaque=-1; hoverSucette=-1; hoverXY=null; hideTip(); draw(); updateDebugPanel(); } });
   map.on("resize", ()=>{ resize(); draw(); if(follow) fitRevealed(); });   // fires when the map container changes size (mobile URL bar, rotate)
   cv.parentElement.addEventListener("wheel", ()=> follow=false, { passive:true });
   const onViewport = ()=>{ map.invalidateSize(false); resize(); draw(); };  // mobile: URL bar show/hide, rotation

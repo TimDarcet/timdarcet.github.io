@@ -112,36 +112,44 @@ def wb_page(path):                              # fetch an archived page, decode
     return raw.decode("cp1252", "replace")
 def wb_text(html):
     return norm_ws(re.sub(r"<[^>]+>", " ", re.sub(r"(?is)<(script|style)[^>]*>.*?</\1>", " ", html)))
+def rohee_panel(html):                           # extract (title, body text) from one archived panel page
+    body = wb_text(html)
+    title = clean(re.sub(r"\s+Histoire de Paris.*", "", body, flags=re.S)[:80])
+    m = re.search(r"Histoire de Paris\s+(.*)", body, re.S)  # re.S: the body spans many lines after the header
+    txt = re.split(r"(?i)\bpelle\s*n|mise\s*.\s*jour", m.group(1))[0] if m else ""   # cut the footer
+    txt = " ".join(clean(txt).split())           # flatten the archived line breaks into flowing text
+    if title and txt.lower().startswith(title.lower()): txt = txt[len(title):].strip()   # drop the echoed title
+    return title, txt
 def stage_rohee():
-    idx = wb_page("paris.htm")
-    listpages = sorted(set(re.findall(r'href="((?:paris/)?[^"]*?(?:_liste|/\d\d)[^"]*\.htm)"', idx)))
-    if not listpages: listpages = sorted(set(re.findall(r'href="(paris/[^"]+\.htm)"', idx)))
-    panels = []
-    for lp in listpages:
+    panels, seen = [], set()
+    try: idx = wb_page("paris.htm")
+    except Exception as e: print(f"  rohee index unreachable ({e})", file=sys.stderr); idx = ""
+    listpages = sorted(set(re.findall(r'href="((?:paris/)?[^"]*?(?:_liste|/\d\d)[^"]*\.htm)"', idx))) \
+                or sorted(set(re.findall(r'href="(paris/[^"]+\.htm)"', idx)))
+    for lp in listpages:                          # crawl: list page -> panel pages
         try: html = wb_page(lp)
         except Exception as e: print(f"  rohee list {lp}: {e}", file=sys.stderr); continue
         base = lp.rsplit("/",1)[0]+"/" if "/" in lp else ""
         for href in re.findall(r'href="([^"]+\.htm)"', html):
-            if "liste" in href or href.startswith("http") or href.startswith("#"): continue
+            if "liste" in href or href.startswith(("http","#")): continue
             panelpath = href if href.startswith("paris/") else base+href
-            try: ph = wb_page(panelpath)
+            try: title, txt = rohee_panel(wb_page(panelpath))
             except Exception: continue
-            body = wb_text(ph)
-            m = re.search(r"Histoire de Paris\s+(.*)", body)      # panel body follows the "Histoire de Paris <title>" header
-            txt = clean(m.group(1) if m else "")
-            txt = re.sub(r"(?i)\bpelle n.?\s*\d+.*$", "", txt).strip()
-            txt = re.sub(r"(?i)mise . jour.*$", "", txt).strip()
-            if len(txt) >= 60:
-                title = clean(re.sub(r"\s+Histoire de Paris.*", "", body)[:80])
-                panels.append({"path": panelpath, "title": title, "text": txt})
+            if len(txt) >= 60 and panelpath not in seen: seen.add(panelpath); panels.append({"path": panelpath, "title": title, "text": txt})
+    # robustness: also mine any panel page already in the cache, even when its list page can't be fetched
+    for f in sorted(CACHE.glob("rohee_paris_*")):
+        if "liste" in f.name: continue
+        title, txt = rohee_panel(f.read_bytes().decode("cp1252","replace"))
+        if len(txt) >= 60 and f.name not in seen: seen.add(f.name); panels.append({"path": f.name, "title": title, "text": txt})
     json.dump(panels, open(DATA/"rohee.json","w"), ensure_ascii=False, indent=1)
-    print(f"stage rohee: {len(listpages)} list pages -> {len(panels)} panels with text", file=sys.stderr)
+    print(f"stage rohee: {len(listpages)} list pages, {len(list(CACHE.glob('rohee_paris_*')))} cached pages -> {len(panels)} panels with text", file=sys.stderr)
 
 # ---- stage 3: OCR panel photos ----------------------------------------------
 # Only top-level curl has network in this sandbox, so ocr_list emits a download list, a shell curl
 # loop fills cache/img_<key>.bin (Commons Special:FilePath redirects straight to the file), then ocr
 # reads those images offline. On a normal machine, `fetch_images` can be driven by curl or extended.
-def ocr_targets(osm): return [p for p in osm if p["starck"] and not p["text"] and (p["commons"] or p["image"])]
+def ocr_targets(osm):   # every Starck panel with a photo — incl. those that already have OSM text, for cross-validation
+    return [p for p in osm if p["starck"] and (p["commons"] or p["image"])]
 def img_key(p): return re.sub(r"[^a-z0-9]+", "_", p["osm"].lower())
 def img_url(p):
     if p["image"].startswith("http"): return p["image"]
@@ -162,6 +170,20 @@ def _tess(png, psm):
                           capture_output=True, env=env).stdout.decode("utf-8","replace")
 def _frenchness(t):                              # proxy for real French text: count of vowel-bearing words len>=3
     return sum(1 for w in re.findall(r"[A-Za-zÀ-ÿ]{3,}", t) if re.search(r"[aeiouyàâéèêîïôûüAEIOUY]", w))
+def deacc(s): return unicodedata.normalize("NFD", s).encode("ascii", "ignore").decode().lower()
+COMMON_FR = set(("le la les un une des de du au aux et ou a en dans par pour sur sous avec sans ce cette ces son sa "
+    "ses leur leurs qui que dont ou est sont fut furent etait etaient sera plus tres bien siecle rue place pont eglise "
+    "saint sainte roi reine ville paris hotel maison lieu ancien anciens nouvelle premier premiere entre apres avant "
+    "pendant depuis jusqu ici ete il elle on nous se ne pas cet mais comme aussi alors puis enfin encore meme toute "
+    "tous toutes grand grande petit deux trois quatre cinq cent mille").split())
+def fr_vocab(osm):                              # reference French vocabulary bootstrapped from the clean OSM texts + function words
+    v = set(COMMON_FR)
+    for p in osm:
+        for w in re.findall(r"[a-zà-ÿ]{3,}", p["text"].lower()): v.add(deacc(w))
+    return v
+def french_ratio(txt, vocab):                   # fraction of words that are known French -> how much this reads as real prose
+    toks = [deacc(w) for w in re.findall(r"[A-Za-zÀ-ÿ]{3,}", txt)]
+    return (sum(1 for w in toks if w in vocab)/len(toks), len(toks)) if toks else (0.0, 0)
 FRSHORT = {"à","la","le","de","du","des","en","un","une","et","au","aux","ce","ces","se","sa","son","est",
            "ne","par","sur","qui","que","les","il","on","ou","où"}
 def _isword(w):                                 # a real French word, a common short word, or an all-caps acronym (SNCF, RATP)
@@ -177,14 +199,18 @@ def ocr_clean(t):                               # drop OCR noise lines (fence ba
     keep = []
     for line in t.splitlines():
         line = trim_edges(line.strip())
-        if not line or re.search(r"histoire\s+de\s+paris", line, re.I): continue   # skip the panel's title band
+        if not line: continue
+        vowelwords = sum(1 for w in re.findall(r"[A-Za-zÀ-ÿ]{3,}", line) if re.search(r"[aeiouyàâéèêîïôûü]", w, re.I))
+        # skip the panel's red title band ("Histoire de Paris") incl. OCR-mangled variants ("ire de Paris")
+        if re.search(r"\bde\s+paris\b", line, re.I) and vowelwords <= 4: continue
         nonspace = sum(not c.isspace() for c in line); letters = sum(c.isalpha() for c in line)
         lower = sum(c.islower() for c in line)
-        vowelwords = sum(1 for w in re.findall(r"[A-Za-zÀ-ÿ]{3,}", line) if re.search(r"[aeiouyàâéèêîïôûü]", w, re.I))
         # real French prose lines: dense with letters, mostly lowercase, several vowel-bearing words
         if nonspace and letters/nonspace >= 0.6 and vowelwords >= 2 and letters and lower/letters >= 0.55:
-            keep.append(line)
-    return "\n".join(keep)
+            keep.append((vowelwords, line))
+    d = 0                                          # the mangled title/subtitle band is the leading weak line(s)
+    while keep and keep[0][0] < 4 and d < 3: keep.pop(0); d += 1
+    return "\n".join(l for _, l in keep)
 def _widest_run(on):                            # longest contiguous True run in a bool array -> (start,end)
     runs=[]; s=None
     for j,v in enumerate(on):
@@ -197,7 +223,8 @@ def crop_panel(g):                              # crop horizontally to the panel
     a = np.asarray(g); cd = (a < 100).mean(0)
     x0, x1 = _widest_run(cd > max(0.30, cd.max()*0.5))
     if (x1-x0) < a.shape[1]*0.2: return g       # detection failed -> keep the whole image
-    pad = int((x1-x0)*0.07); return g.crop((max(0,x0-pad), 0, min(a.shape[1],x1+pad), a.shape[0]))
+    pad = int((x1-x0)*0.13)                      # generous pad: panel edges/text can sit just outside the dark run
+    return g.crop((max(0,x0-pad), 0, min(a.shape[1],x1+pad), a.shape[0]))
 def ocr_file(path):
     # Starck panels are light text on a dark panel photographed in the street: crop to the panel to drop
     # the fence/sky/road, then feed tesseract the INVERTED image (and normal, several PSMs) and keep the
@@ -219,16 +246,25 @@ def stage_ocr():
     # raw tesseract output is cached per image (ocrraw_*.txt) so tweaking the text cleaning is instant;
     # only newly downloaded images actually run the (slow) OCR.
     osm = json.load(open(DATA/"osm.json")); out = {}; done = 0
+    vocab = fr_vocab(osm)
     for p in ocr_targets(osm):
         f = CACHE/f"img_{img_key(p)}.bin"
-        if not f.exists() or not f.stat().st_size: continue
+        if not (f.exists() and f.stat().st_size):        # download the panel photo if not already cached
+            try:
+                data = http(img_url(p), timeout=60)
+                if data[:3] == b"\xff\xd8\xff" or data[:8] == b"\x89PNG\r\n\x1a\n": f.write_bytes(data)
+            except Exception as e: print(f"  img {p['osm']}: {e}", file=sys.stderr)
+        if not (f.exists() and f.stat().st_size): continue
         done += 1
         rawp = CACHE/f"ocrraw_{img_key(p)}.txt"
         try:
             raw = rawp.read_text(encoding="utf-8") if rawp.exists() else ocr_file(f)
             if not rawp.exists(): rawp.write_text(raw, encoding="utf-8")
             txt = clean(ocr_clean(raw))
-            if len(txt) >= 40: out[p["osm"]] = {"text": txt}
+            ratio, n = french_ratio(txt, vocab)
+            # quality gate: keep only OCR that reads as real French (enough words, known-word ratio above the junk band)
+            if n >= 15 and ratio >= 0.42: out[p["osm"]] = {"text": txt, "ratio": round(ratio, 2)}
+
         except Exception as e: print(f"  ocr {p['osm']}: {e}", file=sys.stderr)
     json.dump(out, open(DATA/"ocr.json","w"), ensure_ascii=False, indent=1)
     print(f"stage ocr: {done} cached images -> {len(out)} OCR'd with usable text", file=sys.stderr)
@@ -248,24 +284,28 @@ def stage_merge():
     osm = json.load(open(DATA/"osm.json"))
     rohee = json.load(open(DATA/"rohee.json")) if (DATA/"rohee.json").exists() else []
     ocr = json.load(open(DATA/"ocr.json")) if (DATA/"ocr.json").exists() else {}
+    # vlm.json {osm_id: text}: panel photos transcribed by a vision model (0.98 word-recall vs OSM ground truth,
+    # far above Tesseract's 0.59). Hand-produced, not re-fetchable -> committed (see .gitignore exception).
+    vlm = json.load(open(DATA/"vlm.json")) if (DATA/"vlm.json").exists() else {}
     rohee_by = {}
     for r in rohee: rohee_by.setdefault(norm_key(r["title"]), r["text"])
     panels = [p for p in osm if p["starck"]]
-    ORDER = {"osm": 0, "rohee": 1, "ocr": 2}      # human-curated sources outrank machine OCR
+    ORDER = {"osm": 0, "vlm": 1, "rohee": 2, "ocr": 3}   # OSM ground truth > careful VLM read > 2012 catalogue > Tesseract
     def toks(s): return set(re.findall(r"[a-zà-ÿ]{4,}", s.lower()))
     review, final = [], []
     for p in panels:
         cand = {}                                # source -> text
         if p["text"]: cand["osm"] = p["text"]
+        if p["osm"] in vlm and str(vlm[p["osm"]]).strip(): cand["vlm"] = vlm[p["osm"]].strip()
         rk = norm_key(p["title"])
         if rk and rk in rohee_by: cand["rohee"] = rohee_by[rk]
         if p["osm"] in ocr: cand["ocr"] = ocr[p["osm"]]["text"]
         # pick the most-trusted source that isn't obviously truncated; fall back to the longest
         pick = next((s for s in sorted(cand, key=lambda s: ORDER[s]) if len(cand[s]) >= 80), None) \
                or (max(cand, key=lambda s: len(cand[s])) if cand else None)
-        # confidence: two independent sources sharing most words is a strong signal
+        # confidence: human/VLM sources are high; a lone Tesseract read is low unless corroborated
         conf = "none"
-        if pick == "osm" or pick == "rohee": conf = "high"
+        if pick in ("osm", "vlm", "rohee"): conf = "high"
         elif pick: conf = "low"
         if pick and len(cand) >= 2:
             others = [toks(cand[s]) for s in cand if s != pick]
@@ -280,6 +320,12 @@ def stage_merge():
     json.dump(review, open(DATA/"review.json","w"), ensure_ascii=False, indent=1)
     with open(HERE.parent/"sucettes.js","w",encoding="utf-8") as fh:
         fh.write("window.SUCETTES="); json.dump(out, fh, ensure_ascii=False, separators=(",",":"))
+    # cross-validation: where a panel has BOTH ground-truth OSM text and a machine read, how much OSM vocab was recovered?
+    for src in ("vlm", "ocr"):
+        xval = sorted(len(toks(r["sources"]["osm"]) & toks(r["sources"][src])) / max(1, len(toks(r["sources"]["osm"])))
+                      for r in review if "osm" in r["sources"] and src in r["sources"])
+        if xval: print(f"{src.upper()} vs OSM ground truth (n={len(xval)}): mean recall {sum(xval)/len(xval):.2f}, "
+                       f"median {xval[len(xval)//2]:.2f}", file=sys.stderr)
     bysrc = {};
     for f in final: bysrc[f["src"]] = bysrc.get(f["src"],0)+1
     print(f"stage merge: {len(panels)} panels | {len(out)} with text {bysrc} -> sucettes.js", file=sys.stderr)
