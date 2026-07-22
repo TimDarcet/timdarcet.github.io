@@ -103,6 +103,12 @@
   #arr .abar { grid-column: 1 / -1; height: 6px; background: rgba(255,255,255,.08); border-radius: 4px; overflow: hidden; }
   #arr .abar span { display: block; height: 100%; background: linear-gradient(90deg,#1a73e8,#4aa3ff); border-radius: 4px; }
   #arrBtn.on { background: #1a73e8; color: #fff; border-color: #1a73e8; }
+  /* commemorative-plaque lore tooltip */
+  #plaqueTip { position: fixed; z-index: 605; display: none; max-width: 300px; pointer-events: none;
+               background: rgba(28,20,12,.95); color: #f4ead9; border: 1px solid #b58a4e; border-radius: 10px;
+               padding: 9px 12px; font-size: 12.5px; line-height: 1.4; box-shadow: 0 6px 20px rgba(0,0,0,.45); }
+  #plaqueTip b { display: block; font-family: "Fraunces", Georgia, serif; font-size: 14px; color: #ffd98a; margin-bottom: 3px; }
+  #plaqueTip .padr { display: block; margin-top: 5px; font-size: 11px; color: #bfa77f; }
   /* room panel: always-visible code + peers + a box to merge another room. Bottom-right, above the HUD */
   /* room panel: drawn directly on the map (no box), bottom-right above the HUD */
   #room { position: fixed; right: 12px; bottom: calc(112px + env(safe-area-inset-bottom)); z-index: 555; width: 190px;
@@ -225,6 +231,7 @@
   <div id="hist"></div>
 </aside>
 <div id="msg" role="status" aria-live="polite"></div>
+<div id="plaqueTip" role="tooltip"></div>
 <div id="hud">
   <div id="stats"></div>
   <div id="entry">
@@ -241,6 +248,7 @@
 <div id="loading" role="status">Loading map of Paris…</div>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="paris.js"></script>
+<script src="plaques.js"></script>
 <script src="match.js"></script>
 <script src="sync.js"></script>
 <script>
@@ -253,6 +261,7 @@ else window.addEventListener("resize", syncHudHeight);
 requestAnimationFrame(syncHudHeight);
 
 const D = window.PARIS, NODES = D.nodes, EDGES = D.edges;
+const PLAQUES = window.PLAQUES || [];            // commemorative plaques (opendata.paris.fr): hoverable lore dots
 const TOTAL_KM = EDGES.reduce((s,e)=>s+e.k, 0);
 
 // ---- i18n (french / english) ----------------------------------------------
@@ -284,10 +293,10 @@ const I18N = {
       "↑ recalls your last guess · drag/scroll to move · ⌖ recenters · D toggles debug.",
     ],
     rulesStart: "Start exploring",
-    dailyTitle: "Daily · 5 minutes", dailyStart: "Start daily run",
+    dailyTitle: "Daily route", dailyStart: "Start the route",
     dailyOver: "Time!", playFree: "Free play", share: "Copy result",
-    copied: "Copied to clipboard!", daily: "Daily", timeLeft: "left",
-    result: n=>`Paris daily — ${n}`,
+    copied: "Copied to clipboard!", daily: "Daily route", timeLeft: "left",
+    result: n=>`Paris daily route — ${n}`,
     startTitle: "Where to begin?",
     startBody: "You're not in Paris — pick a starting point and reveal outward from there.",
     startTypes: [["landmark","A famous spot"],["random","Surprise me"]],
@@ -329,10 +338,10 @@ const I18N = {
       "↑ rappelle votre dernière saisie · glisser/molette pour bouger · ⌖ recentre · D pour le debug.",
     ],
     rulesStart: "Commencer",
-    dailyTitle: "Défi du jour · 5 minutes", dailyStart: "Lancer le défi",
+    dailyTitle: "Trajet du jour", dailyStart: "Lancer le trajet",
     dailyOver: "Temps écoulé !", playFree: "Jeu libre", share: "Copier le résultat",
-    copied: "Copié dans le presse-papier !", daily: "Défi", timeLeft: "restant",
-    result: n=>`Paris défi du jour — ${n}`,
+    copied: "Copié dans le presse-papier !", daily: "Trajet du jour", timeLeft: "restant",
+    result: n=>`Trajet du jour — ${n}`,
     startTitle: "Par où commencer ?",
     startBody: "Vous n'êtes pas à Paris — choisissez un point de départ et dévoilez la ville à partir de là.",
     startTypes: [["landmark","Un lieu célèbre"],["random","Au hasard"]],
@@ -388,6 +397,10 @@ const arrKm = new Float64Array(NB+1), arrArea = new Float64Array(NB+1);
 const ai = e => (e.a>=0 && e.a<NB) ? e.a : NB;
 EDGES.forEach(e=>{ const k=ai(e); arrTotKm[k]+=e.k; arrTotN[k]++; });
 FACES.forEach(f=>{ const k=(f.a>=0&&f.a<NB)?f.a:NB; arrTotArea[k]+=f.m||0; });
+// per-quartier revealed km, for the "neighborhood complete" celebration (quartier = neighborhood)
+const NQ = (D.qua || []).length;
+const quaTotKm = new Float64Array(NQ), quaKm = new Float64Array(NQ);
+if (NQ) EDGES.forEach(e=>{ if (e.q>=0 && e.q<NQ) quaTotKm[e.q]+=e.k; });
 
 const SAVE_KEY = "paris-streets-progress";
 const DEBUG_HIDE_KEY = "paris-debug-hidden";
@@ -420,6 +433,9 @@ function riveOf(ei){                              // 0 = right bank, 1 = left ba
   for (const r of ISLANDS) if (pointInRing(p[0], p[1], r)) return 2;
   return RIVE_GAUCHE.has(parseInt(ARR[a],10)) ? 1 : 0;
 }
+// per-bank revealed km, for the biggest completion celebration (a whole rive is the largest area)
+const rivTotKm = new Float64Array(3), rivKm = new Float64Array(3);
+EDGES.forEach((e,i)=>{ const r=riveOf(i); if (r>=0) rivTotKm[r]+=e.k; });
 const hasQuartiers = () => Array.isArray(D.qua) && D.qua.length > 0 && EDGES[0] && EDGES[0].q !== undefined;
 let granIdx = 0;                                  // selected granularity (index into granList())
 function granList(){                              // built fresh so labels track the language; order: arr, quartier, rive
@@ -603,6 +619,8 @@ function reveal(ei, replay){
   if (revEdge[ei]) return false;
   revEdge[ei] = 1; revList.push(ei); revEdgeCount++; revKm += EDGES[ei].k;
   const k = ai(EDGES[ei]); arrKm[k]+=EDGES[ei].k; arrCntN[k]++;
+  const eq = EDGES[ei].q; if (eq>=0 && eq<quaKm.length) quaKm[eq]+=EDGES[ei].k;
+  const er = riveOf(ei); if (er>=0) rivKm[er]+=EDGES[ei].k;
   EDGES[ei].i.forEach(ni => revNode[ni] = 1);
   // update frontier: this edge's endpoints may now be revealed; any node that just
   // lost its last unrevealed edge drops out. Only touch nodes adjacent to this edge.
@@ -632,6 +650,7 @@ function reveal(ei, replay){
 // ---- map + overlay --------------------------------------------------------
 let map, W, H, DPR, follow = true, selNode = -1, debug = false, hoverFace = -1, dragging = false;
 let hoverEdge = -1, hoverXY = null;              // revealed street under cursor + cursor pos, for name tooltip
+let hoverPlaque = -1;                            // commemorative plaque under cursor
 const cv = document.getElementById("fog"), ctx = cv.getContext("2d");
 const fogLayer = document.createElement("canvas"), fctx = fogLayer.getContext("2d");  // cached fog+streets
 const edgeCv = document.createElement("canvas"), ectx = edgeCv.getContext("2d");      // filtered reveal shape (baked once/rebuild)
@@ -679,7 +698,9 @@ function precompute(){
     }
     fb[fi]=[mnx,mny,mxx,mxy]; return a;
   });
-  PX = { e, eb, n, f, fb };
+  const pl = new Float64Array(PLAQUES.length*2);
+  for (let i=0;i<PLAQUES.length;i++){ const q=map.project([PLAQUES[i].la, PLAQUES[i].lo], REFZ); pl[2*i]=q.x; pl[2*i+1]=q.y; }
+  PX = { e, eb, n, f, fb, pl };
 }
 function updateXform(){                            // recompute affine + visible bbox for the current view (2 Leaflet calls)
   const z = map.getZoom();
@@ -1040,6 +1061,43 @@ function draw(){
     ctx.shadowBlur=0;
   }
 
+  // 6c. commemorative plaques (opendata.paris.fr): small bronze dots, hover for the transcribed text
+  if (PX.pl && PLAQUES.length){
+    ctx.beginPath();
+    for (let i=0;i<PLAQUES.length;i++){
+      if (i===hoverPlaque || !revEdge[PLAQUES[i].ei]) continue;   // only once its street is revealed
+      const px=PX.pl[2*i], py=PX.pl[2*i+1];
+      if (px<visMinX||px>visMaxX||py<visMinY||py>visMaxY) continue;
+      const sx=px*S+Tx, sy=py*S+Ty;
+      ctx.moveTo(sx+2.4, sy); ctx.arc(sx, sy, 2.4, 0, 6.2832);
+    }
+    ctx.fillStyle="rgba(150,90,40,0.7)"; ctx.fill();
+    ctx.lineWidth=1; ctx.strokeStyle="rgba(255,244,230,0.75)"; ctx.stroke();
+    if (hoverPlaque>=0){                             // draw the hovered dot larger, on top
+      const sx=PX.pl[2*hoverPlaque]*S+Tx, sy=PX.pl[2*hoverPlaque+1]*S+Ty;
+      ctx.beginPath(); ctx.arc(sx, sy, 5, 0, 6.2832);
+      ctx.fillStyle="#e0a92e"; ctx.fill(); ctx.lineWidth=2; ctx.strokeStyle="#fff"; ctx.stroke();
+    }
+  }
+
+  // 6d. daily route: pulse the goal street; when off-screen, a chevron at the border points to it
+  if (daily && !dailyEnded && dailyTarget>=0){
+    const tp = edgePoint(dailyTarget), q = proj(tp[0], tp[1]);
+    const pulse = 0.5 + 0.5*Math.sin((Date.now()%1200)/1200*6.2832);
+    if (q.x>=0 && q.x<=W && q.y>=0 && q.y<=H){
+      ctx.strokeStyle = `rgba(234,67,53,${0.45+0.4*pulse})`; ctx.lineWidth = brush*0.5;
+      ctx.beginPath(); strokePaths(dailyTarget); ctx.stroke();
+      ctx.beginPath(); ctx.arc(q.x, q.y, 9+5*pulse, 0, 6.2832); ctx.strokeStyle="#ea4335"; ctx.lineWidth=3; ctx.stroke();
+      ctx.beginPath(); ctx.arc(q.x, q.y, 4, 0, 6.2832); ctx.fillStyle="#ea4335"; ctx.fill();
+    } else {
+      const ang = Math.atan2(q.y-H/2, q.x-W/2), m=26;
+      const bx = Math.max(m, Math.min(W-m, q.x)), by = Math.max(m, Math.min(H-m, q.y));
+      ctx.save(); ctx.translate(bx, by); ctx.rotate(ang);
+      ctx.fillStyle="#ea4335"; ctx.beginPath(); ctx.moveTo(14,0); ctx.lineTo(-9,-9); ctx.lineTo(-9,9); ctx.closePath(); ctx.fill();
+      ctx.restore();
+    }
+  }
+
   // 7. hovered street: highlight it and show its name in a tooltip by the cursor. Normally only
   //    revealed streets are hoverable (red); in debug mode unrevealed ones show too, tinted purple.
   if (hoverEdge >= 0 && hoverXY){
@@ -1070,6 +1128,14 @@ function frontierCount(){                         // # of distinct unrevealed ed
 const disp = { streets: 0, km: 0, area: 0 };
 let statsRAF = 0;
 function renderStats(){
+  if (daily && dailyTarget>=0){                    // daily route: show the goal + your running cost
+    document.getElementById("stats").innerHTML =
+      `<span>🎯 <b>${escHtml(EDGES[dailyTarget].n)}</b></span>`+
+      `<span><b>${revEdgeCount}</b> ${t("streets")}</span>`+
+      `<span><b>${revKm.toFixed(1)}</b> ${t("km")}</span>`+
+      (streak>=2?`<span class="strk" id="strk">🔥 <b>${streak}</b> ${t("streak")}</span>`:"");
+    return;
+  }
   const pS=(100*disp.streets/EDGES.length).toFixed(1), pK=(100*disp.km/TOTAL_KM).toFixed(1);
   const pA=(100*disp.area/TOTAL_AREA).toFixed(1);
   const st = streak>=2 ? `<span class="strk" id="strk">🔥 <b>${streak}</b> ${t("streak")}</span>` : "";
@@ -1156,7 +1222,14 @@ function toast(text){
   toastEl.textContent = text; toastEl.classList.add("show");
   clearTimeout(toastTimer); toastTimer = setTimeout(()=>toastEl.classList.remove("show"), 2200);
 }
-let lastPctMilestone = 0, celebratedArr = new Set();
+let lastPctMilestone = 0, celebratedArr = new Set(), celebratedQua = new Set(), celebratedRive = new Set();
+// bigger area (more total km) -> bigger confetti burst, quartier ~70 ... whole bank ~500
+function celebrateArea(label, totalKm){ toast(label); confetti(Math.round(Math.min(500, 40 + 13*Math.sqrt(totalKm)))); sound(3, 90000, true); }
+// mark already-finished areas so a restored/loaded game doesn't re-celebrate them
+function areaBaselines(){
+  celebratedQua.clear(); for (let k=0;k<quaKm.length;k++) if (quaTotKm[k]>0 && quaKm[k]/quaTotKm[k]>=0.999) celebratedQua.add(k);
+  celebratedRive.clear(); for (let k=0;k<3;k++) if (rivTotKm[k]>0 && rivKm[k]/rivTotKm[k]>=0.999) celebratedRive.add(k);
+}
 function checkMilestones(){
   const pct = 100*revEdgeCount/EDGES.length;
   for (const m of [1,5,10,25,50,75,90,100]){
@@ -1167,12 +1240,24 @@ function checkMilestones(){
       sound(2, 60000, true);
     }
   }
-  // completion celebration: an arrondissement hit 100%
-  for (let k=0;k<NB;k++){
+  // area completions — burst scales with area size: quartier < arrondissement < whole bank
+  for (let k=0;k<quaKm.length;k++){                 // quartier (neighborhood)
+    if (!celebratedQua.has(k) && quaTotKm[k]>0 && quaKm[k]/quaTotKm[k] >= 0.999){
+      celebratedQua.add(k);
+      celebrateArea(LANG==="fr"?`Quartier ${D.qua[k]} terminé ! 🎉`:`${D.qua[k]} — neighborhood complete! 🎉`, quaTotKm[k]);
+    }
+  }
+  for (let k=0;k<NB;k++){                           // arrondissement
     if (!celebratedArr.has(k) && arrTotKm[k]>0 && arrKm[k]/arrTotKm[k] >= 0.999){
       celebratedArr.add(k);
-      toast((LANG==="fr"?`${ARR[k]}e arrondissement terminé ! 🎉`:`${ARR[k]}e arrondissement complete! 🎉`));
-      confetti(160); sound(3, 90000, true);
+      celebrateArea(LANG==="fr"?`${ARR[k]}e arrondissement terminé ! 🎉`:`${ARR[k]}e arrondissement complete! 🎉`, arrTotKm[k]);
+    }
+  }
+  const rlab = [t("riveDroite"), t("riveGauche"), t("iles")];
+  for (let k=0;k<3;k++){                            // whole bank — the largest area, biggest burst
+    if (!celebratedRive.has(k) && rivTotKm[k]>0 && rivKm[k]/rivTotKm[k] >= 0.999){
+      celebratedRive.add(k);
+      celebrateArea(LANG==="fr"?`${rlab[k]} : 100 % ! 🎉🎉`:`${rlab[k]} 100% complete! 🎉🎉`, rivTotKm[k]);
     }
   }
 }
@@ -1255,6 +1340,7 @@ function submitGuess(){
     let m = "✓ " + [...byName].map(([nm,c]) => nm + (c>1 ? ` ×${c}` : "")).join(" · ");
     if (streak>=5 && streak%5===0){ m += `  🔥 ${streak}!`; toast(`🔥 ${streak} ${t("streak")}!`); }
     flash(m, true);
+    if (daily) checkDailyWin();                   // daily route: reaching the target ends the run
   } else {
     streak = 0; updateStats();
     // glow every street on-screen whose name matches the guess, revealed or not, so you can always
@@ -1309,6 +1395,32 @@ function updateDebugPanel(){
     done.map(n=>`<div class="dd">✓ ${n}</div>`).join("");
   dbgPanel.style.display = "block";
 }
+const plaqueTipEl = document.getElementById("plaqueTip");
+function plaqueAt(x, y){                           // nearest plaque within ~9px of screen point (x,y), else -1
+  if (!PX || !PX.pl) return -1;
+  let best=-1, bd=81;
+  for (let i=0;i<PLAQUES.length;i++){
+    if (!revEdge[PLAQUES[i].ei]) continue;         // only hoverable once its street is revealed
+    const px=PX.pl[2*i], py=PX.pl[2*i+1];
+    if (px<visMinX||px>visMaxX||py<visMinY||py>visMaxY) continue;
+    const dx=px*S+Tx-x, dy=py*S+Ty-y, d=dx*dx+dy*dy;
+    if (d<bd){ bd=d; best=i; }
+  }
+  return best;
+}
+function positionPlaqueTip(x, y){
+  const el=plaqueTipEl, w=el.offsetWidth, h=el.offsetHeight;
+  let bx=x+14, by=y+14;
+  if (bx+w>W-6) bx=x-w-14; if (bx<6) bx=6;
+  if (by+h>H-6) by=y-h-14; if (by<6) by=6;
+  el.style.left=bx+"px"; el.style.top=by+"px";
+}
+function showPlaqueTip(i, x, y){
+  if (i<0){ plaqueTipEl.style.display="none"; return; }
+  const p=PLAQUES[i];
+  plaqueTipEl.innerHTML = (p.t?`<b>${escHtml(p.t)}</b>`:"") + escHtml(p.r||"") + (p.a?`<span class="padr">${escHtml(p.a)}</span>`:"");
+  plaqueTipEl.style.display="block"; positionPlaqueTip(x, y);
+}
 let hoverRAF = 0;
 function onMouseMove(e){
   const x = e.containerPoint.x, y = e.containerPoint.y;
@@ -1317,7 +1429,10 @@ function onMouseMove(e){
   if (he !== hoverEdge){ hoverEdge = he; dirty = true; }
   hoverXY = {x, y};
   if (hoverEdge >= 0) dirty = true;               // reposition tooltip as the cursor moves along a street
-  cv.style.cursor = hoverEdge >= 0 ? "pointer" : "";
+  const hp = plaqueAt(x, y);                       // commemorative plaque under cursor
+  if (hp !== hoverPlaque){ hoverPlaque = hp; dirty = true; showPlaqueTip(hp, x, y); }
+  else if (hp >= 0) positionPlaqueTip(x, y);
+  cv.style.cursor = (hoverEdge >= 0 || hp >= 0) ? "pointer" : "";
   if (debug){
     const f = faceAt(x, y);
     if (f !== hoverFace){ hoverFace = f; dirty = true; updateDebugPanel(); }
@@ -1398,12 +1513,13 @@ function debugUnreveal(ei){
   const keep = revList.filter(k => !removed.has(k)).map(k => [k, edgeColor[k]]);
   revEdge.fill(0); revNode.fill(0); revFace.fill(0); edgeColor.fill(null);
   revList.length=0; faceList.length=0; anim.length=0; frontier.clear();
-  revEdgeCount=0; revKm=0; revArea=0; arrKm.fill(0); arrArea.fill(0); arrCntN.fill(0);
+  revEdgeCount=0; revKm=0; revArea=0; arrKm.fill(0); arrArea.fill(0); arrCntN.fill(0); quaKm.fill(0); rivKm.fill(0);
   flashEdge=-1; flashT=0; selNode=-1; streak=0;
   for (const [k,col] of keep){ reveal(k, true); if (col) edgeColor[k]=col; }
   lastPctMilestone = 100*revEdgeCount/EDGES.length;
   celebratedArr.clear();
   for (let k=0;k<NB;k++) if (arrTotKm[k]>0 && arrKm[k]/arrTotKm[k]>=0.999) celebratedArr.add(k);
+  areaBaselines();
   fogDirty=true; save(); updateStats(true); draw();
   flash("− " + EDGES[ei].n, true);
 }
@@ -1417,6 +1533,9 @@ function onMapContextMenu(e){
 }
 function onMapClick(e){
   if (daily && dailyEnded) return;
+  const hp = plaqueAt(e.containerPoint.x, e.containerPoint.y);   // tap a plaque dot to read it (touch: no hover)
+  if (hp >= 0){ hoverPlaque = hp; showPlaqueTip(hp, e.containerPoint.x, e.containerPoint.y); draw(); return; }
+  if (hoverPlaque >= 0){ hoverPlaque = -1; showPlaqueTip(-1); draw(); }
   if (debug){
     const ei = edgeAt(e.containerPoint.x, e.containerPoint.y);
     if (ei >= 0){
@@ -1482,7 +1601,7 @@ function begin(lat, lon){
   map.on("click", onMapClick);
   if (debug) map.on("contextmenu", onMapContextMenu);
   map.on("mousemove", onMouseMove);
-  map.on("mouseout", ()=>{ if(hoverEdge>=0||hoverFace>=0){ hoverEdge=-1; hoverFace=-1; hoverXY=null; draw(); updateDebugPanel(); } });
+  map.on("mouseout", ()=>{ if(hoverEdge>=0||hoverFace>=0||hoverPlaque>=0){ hoverEdge=-1; hoverFace=-1; hoverPlaque=-1; hoverXY=null; showPlaqueTip(-1); draw(); updateDebugPanel(); } });
   map.on("resize", ()=>{ resize(); draw(); if(follow) fitRevealed(); });   // fires when the map container changes size (mobile URL bar, rotate)
   cv.parentElement.addEventListener("wheel", ()=> follow=false, { passive:true });
   const onViewport = ()=>{ map.invalidateSize(false); resize(); draw(); };  // mobile: URL bar show/hide, rotation
@@ -1499,6 +1618,7 @@ function begin(lat, lon){
   // set milestone/celebration baselines from restored progress so we don't re-toast on load
   lastPctMilestone = 100*revEdgeCount/EDGES.length;
   for (let k=0;k<NB;k++) if (arrTotKm[k]>0 && arrKm[k]/arrTotKm[k]>=0.999) celebratedArr.add(k);
+  areaBaselines();
   updateStats(true);                              // instant (no count-up from zero on load)
   setSide(!MOBILE);                               // sidebar open on desktop, folded by default on phones
   map.whenReady(()=>{ resize(); fitRevealed(); draw(); });
@@ -1616,17 +1736,43 @@ function showStartChooser(done){
   });
 }
 
-// ---- daily 5-minute mode --------------------------------------------------
-const DAY_MS = 5*60*1000;
-let timerEnd = 0, timerIv = null, dailyStreets = 0, dailyKm = 0, dailyEnded = false;
+// ---- daily route mode: reach a target street from a start street, in the fewest streets/km/time --
+let timerIv = null, dailyEnded = false, dailyRAF = 0;
+let dailyStart = -1, dailyTarget = -1, dailyOptimal = 0, dailyOptimalKm = 0, dailyT0 = 0, dailyElapsed = 0;
 function todaySeed(){ const d=new Date(); return d.getUTCFullYear()*10000 + (d.getUTCMonth()+1)*100 + d.getUTCDate(); }
-function seededEdge(seed){                        // deterministic start street from a seed
-  let x = (seed*2654435761) % EDGES.length; if (x<0) x+=EDGES.length;
-  return x;
+function seededEdge(seed){ let x=(seed*2654435761)%EDGES.length; if(x<0)x+=EDGES.length; return x; }
+function rng(seed){ let s=(seed>>>0)||1; return ()=>{ s=(s*1664525+1013904223)>>>0; return s/4294967296; }; }
+function bfsEdgeDist(start){                       // min #streets from start to every edge (edges adjacent when they share a node)
+  const dist = new Int32Array(EDGES.length).fill(-1);
+  dist[start]=0; const q=[start];
+  for (let h=0;h<q.length;h++){ const e=q[h];
+    for (const ni of EDGES[e].i) for (const e2 of nodeEdges[ni]) if (dist[e2]<0){ dist[e2]=dist[e]+1; q.push(e2); } }
+  return dist;
+}
+function dijkstraKm(start){                        // min total street-km to connect start to every edge (each edge costs its length)
+  const cost = new Float64Array(EDGES.length).fill(Infinity), heap = [];
+  const push=(c,e)=>{ heap.push([c,e]); let i=heap.length-1; while(i){ const p=(i-1)>>1; if(heap[p][0]<=heap[i][0])break; [heap[p],heap[i]]=[heap[i],heap[p]]; i=p; } };
+  const pop=()=>{ const top=heap[0], last=heap.pop(); if(heap.length){ heap[0]=last; let i=0; for(;;){ let l=2*i+1,r=l+1,s=i; if(l<heap.length&&heap[l][0]<heap[s][0])s=l; if(r<heap.length&&heap[r][0]<heap[s][0])s=r; if(s===i)break; [heap[s],heap[i]]=[heap[i],heap[s]]; i=s; } } return top; };
+  cost[start]=EDGES[start].k; push(cost[start], start);
+  while(heap.length){ const [c,e]=pop(); if(c>cost[e]) continue;
+    for (const ni of EDGES[e].i) for (const e2 of nodeEdges[ni]){ const nc=c+EDGES[e2].k; if(nc<cost[e2]){ cost[e2]=nc; push(nc,e2); } } }
+  return cost;
+}
+function dailyPair(seed){                          // deterministic start + a target 8-14 streets away (same for everyone)
+  const rand = rng(seed);                          // street-hops are coarse: the whole city is ~15 hops across
+  for (let tries=0; tries<40; tries++){
+    const start = Math.floor(rand()*EDGES.length), dist = bfsEdgeDist(start), cand = [];
+    for (let e=0;e<EDGES.length;e++) if (dist[e]>=8 && dist[e]<=14) cand.push(e);
+    if (cand.length>=20){ const target = cand[Math.floor(rand()*cand.length)]; return { start, target, optimal: dist[target], optimalKm: dijkstraKm(start)[target] }; }
+  }
+  const start = seededEdge(seed), dist = bfsEdgeDist(start);   // fallback: farthest reachable
+  let target=start, best=0; for (let e=0;e<EDGES.length;e++) if (dist[e]>best){ best=dist[e]; target=e; }
+  return { start, target, optimal: best, optimalKm: dijkstraKm(start)[target] };
 }
 function showDaily(){
+  const FR = LANG==="fr";
   showModal(`<h2>${t("dailyTitle")}</h2>`+
-    `<p class="big">${LANG==="fr"?"Même départ pour tout le monde aujourd'hui. Révélez un maximum de rues en 5 minutes, puis partagez votre score.":"Everyone starts from the same street today. Reveal as many streets as you can in 5 minutes, then share your score."}</p>`+
+    `<p class="big">${FR?"Même trajet pour tout le monde aujourd'hui : reliez la rue de départ à la rue cible 🎯 en nommant le moins de rues possible. Le chrono tourne !":"Same route for everyone today: connect the start street to the target 🎯 by naming as few streets as possible. The clock is running!"}</p>`+
     `<button class="primary" id="dStart">${t("dailyStart")}</button>`+
     `<button class="ghost" id="dCancel">${t("playFree")}</button>`);
   document.getElementById("dStart").onclick = startDaily;
@@ -1636,61 +1782,64 @@ function startDaily(){
   closeModal();
   Sync.leave(true);                               // daily is solo: drop live channels but KEEP the room so exit rejoins it
   document.getElementById("room").style.display = "none";
-  edgeColor.fill(null);
-  debugHidden.clear();                             // daily is isolated; persisted free-play overrides remain on disk
+  edgeColor.fill(null); debugHidden.clear();
   daily = true; dailyEnded=false; streak=0; bestStreak=0;
   document.getElementById("guess").disabled = false;
-  // wipe current state
   revEdge.fill(0); revNode.fill(0); revFace.fill(0);
   revList.length=0; faceList.length=0; anim.length=0; frontier.clear();
-  revEdgeCount=0; revKm=0; revArea=0; arrKm.fill(0); arrArea.fill(0); arrCntN.fill(0);
-  lastPctMilestone=0; celebratedArr.clear(); disp.streets=0; disp.km=0; disp.area=0;
-  setSide(false);                                 // daily is solo: fold the sidebar (updateStats keeps it hidden)
-  const seed = todaySeed();
-  reveal(seededEdge(seed), true);
-  dailyStreets = revEdgeCount; dailyKm = revKm;
-  updateStats(true); fitRevealed(); draw();
+  revEdgeCount=0; revKm=0; revArea=0; arrKm.fill(0); arrArea.fill(0); arrCntN.fill(0); quaKm.fill(0); rivKm.fill(0);
+  lastPctMilestone=0; celebratedArr.clear(); celebratedQua.clear(); celebratedRive.clear(); disp.streets=0; disp.km=0; disp.area=0;
+  setSide(false);
+  const pair = dailyPair(todaySeed());
+  dailyStart = pair.start; dailyTarget = pair.target; dailyOptimal = pair.optimal + 1;   // +1: start street counts too
+  dailyOptimalKm = pair.optimalKm;
+  reveal(dailyStart, true);
+  updateStats(true);
+  const bb = edgeBounds(dailyStart).extend(edgeBounds(dailyTarget));                       // frame start + goal
+  map.whenReady(()=> tweenTo(bb.getCenter(), zoomForBounds(bb, 90, 15), 600));
   document.getElementById("guess").focus();
-  timerEnd = Date.now() + DAY_MS;
+  dailyT0 = Date.now(); dailyElapsed = 0;
   document.getElementById("timer").style.display="block";
   clearInterval(timerIv); timerIv = setInterval(tickTimer, 250); tickTimer();
+  if (!dailyRAF) dailyRAF = requestAnimationFrame(dailyLoop);
+  toast(LANG==="fr" ? `🎯 Cap sur ${EDGES[dailyTarget].n}` : `🎯 Head to ${EDGES[dailyTarget].n}`);
 }
-function tickTimer(){
-  const left = Math.max(0, timerEnd - Date.now());
-  const el = document.getElementById("timer");
-  const s = Math.ceil(left/1000);
-  el.textContent = `${Math.floor(s/60)}:${String(s%60).padStart(2,"0")} ${t("timeLeft")}`;
-  el.classList.toggle("warn", left <= 30000);
-  if (left <= 0){ clearInterval(timerIv); endDaily(); }
-}
-function endDaily(){
+function dailyLoop(){ if(!daily||dailyEnded){ dailyRAF=0; return; } draw(); dailyRAF=requestAnimationFrame(dailyLoop); }  // pulse the target
+function tickTimer(){                              // count UP: elapsed time is a score to minimise
   if (dailyEnded) return;
+  dailyElapsed = Date.now() - dailyT0;
+  const s = Math.floor(dailyElapsed/1000);
+  document.getElementById("timer").textContent = `⏱ ${Math.floor(s/60)}:${String(s%60).padStart(2,"0")}`;
+}
+function checkDailyWin(){ if (daily && !dailyEnded && dailyTarget>=0 && revEdge[dailyTarget]) winDaily(); }
+function fmtTime(ms){ const s=Math.floor(ms/1000); return `${Math.floor(s/60)}:${String(s%60).padStart(2,"0")}`; }
+function dailyGrid(streets, optimal){              // Wordle-style efficiency bar (optimal / your path)
+  const g = Math.round((streets>0?Math.min(1, optimal/streets):0)*5);
+  return (streets<=optimal?"🎯 ":"") + "🟩".repeat(g) + "⬜".repeat(5-g);
+}
+function winDaily(){
   dailyEnded = true;
   document.getElementById("guess").disabled = true;
   document.getElementById("timer").style.display="none";
-  const streets = revEdgeCount, km = revKm, area = revArea;
-  const grid = shareGrid(streets, km);
-  showModal(`<h2>${t("dailyOver")}</h2>`+
+  if (dailyRAF){ cancelAnimationFrame(dailyRAF); dailyRAF=0; }
+  clearInterval(timerIv);
+  confetti(220); sound(3, 90000, true);
+  const FR = LANG==="fr", streets = revEdgeCount, km = revKm, tstr = fmtTime(dailyElapsed), grid = dailyGrid(streets, dailyOptimal);
+  showModal(`<h2>${FR?"Arrivé ! 🎉":"Arrived! 🎉"}</h2>`+
+    `<p class="big">${EDGES[dailyStart].n} → <b>${EDGES[dailyTarget].n}</b> · ⏱ ${tstr}</p>`+
     `<div class="stats-grid">`+
       `<div class="sg"><b>${streets}</b><span>${t("streets")}</span></div>`+
+      `<div class="sg"><b>${dailyOptimal}</b><span>min ${t("streets")}</span></div>`+
       `<div class="sg"><b>${km.toFixed(1)}</b><span>${t("km")}</span></div>`+
-      `<div class="sg"><b>${(area/1e6).toFixed(2)}</b><span>${t("area")}</span></div>`+
-      `<div class="sg"><b>${bestStreak}</b><span>${t("streak")}</span></div>`+
+      `<div class="sg"><b>${dailyOptimalKm.toFixed(1)}</b><span>min ${t("km")}</span></div>`+
     `</div>`+
     `<div class="share">${grid}</div>`+
     `<button class="primary" id="shareBtn">${t("share")}</button>`+
     `<button class="ghost" id="freeBtn">${t("playFree")}</button>`, true);
   const link = location.origin+location.pathname+"#daily";
-  const text = `${t("result")(new Date().toISOString().slice(0,10))}\n${grid}\n${streets} ${t("streets")} · ${km.toFixed(1)} ${t("km")}\n${link}`;
-  document.getElementById("shareBtn").onclick = ()=>{
-    navigator.clipboard.writeText(text).then(()=>flash(t("copied"), true));
-  };
+  const text = `${t("result")(new Date().toISOString().slice(0,10))}\n${grid}\n${streets} ${t("streets")} (min ${dailyOptimal}) · ${km.toFixed(1)} ${t("km")} (min ${dailyOptimalKm.toFixed(1)}) · ${tstr}\n${link}`;
+  document.getElementById("shareBtn").onclick = ()=> navigator.clipboard.writeText(text).then(()=>flash(t("copied"), true));
   document.getElementById("freeBtn").onclick = ()=>{ daily=false; closeModal(); location.reload(); };
-}
-function shareGrid(streets, km){                   // emoji progress bar, Wordle-style
-  const pct = Math.min(1, km/40);                  // 40 km in 5 min = full bar
-  const filled = Math.round(pct*10);
-  return "🟦".repeat(filled) + "⬜".repeat(10-filled);
 }
 
 // ---- feedback form --------------------------------------------------------

@@ -15,5 +15,8 @@ plaza_raw.json
 # Paris Open Data quartier boundaries (build_areas.py input; re-fetched if absent)
 quartiers.geojson
 
+# Paris Open Data commemorative plaques raw API cache (build_plaques.py input; re-fetched if absent)
+plaques_raw.json
+
 # Foglamp publish metadata (scan.lock.json contains the private edit token)
 .foglamp/
