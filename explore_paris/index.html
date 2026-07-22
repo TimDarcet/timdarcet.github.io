@@ -298,7 +298,7 @@ const I18N = {
       "↑ recalls your last guess · drag/scroll to move · ⌖ recenters · D toggles debug.",
     ],
     rulesStart: "Start exploring",
-    dailyTitle: "Daily route", dailyStart: "Start the route",
+    dailyTitle: "Daily route", dailyStart: "Start the route", revealYest: "Yesterday's best route",
     dailyOver: "Time!", playFree: "Free play", share: "Copy result",
     copied: "Copied to clipboard!", daily: "Daily route", timeLeft: "left",
     result: n=>`Paris daily route — ${n}`,
@@ -343,7 +343,7 @@ const I18N = {
       "↑ rappelle votre dernière saisie · glisser/molette pour bouger · ⌖ recentre · D pour le debug.",
     ],
     rulesStart: "Commencer",
-    dailyTitle: "Trajet du jour", dailyStart: "Lancer le trajet",
+    dailyTitle: "Trajet du jour", dailyStart: "Lancer le trajet", revealYest: "Meilleur trajet d'hier",
     dailyOver: "Temps écoulé !", playFree: "Jeu libre", share: "Copier le résultat",
     copied: "Copié dans le presse-papier !", daily: "Trajet du jour", timeLeft: "restant",
     result: n=>`Trajet du jour — ${n}`,
@@ -1803,7 +1803,9 @@ function showStartChooser(done){
 // ---- daily route mode: reach a target street from a start street, in the fewest streets/km/time --
 let timerIv = null, dailyEnded = false, dailyRAF = 0;
 let dailyStart = -1, dailyTarget = -1, dailyOptimal = 0, dailyOptimalKm = 0, dailyT0 = 0, dailyElapsed = 0;
-function todaySeed(){ const d=new Date(); return d.getUTCFullYear()*10000 + (d.getUTCMonth()+1)*100 + d.getUTCDate(); }
+function daySeed(d){ return d.getUTCFullYear()*10000 + (d.getUTCMonth()+1)*100 + d.getUTCDate(); }
+function todaySeed(){ return daySeed(new Date()); }
+function yesterdaySeed(){ const d=new Date(); d.setUTCDate(d.getUTCDate()-1); return daySeed(d); }
 function seededEdge(seed){ let x=(seed*2654435761)%EDGES.length; if(x<0)x+=EDGES.length; return x; }
 function rng(seed){ let s=(seed>>>0)||1; return ()=>{ s=(s*1664525+1013904223)>>>0; return s/4294967296; }; }
 function bfsEdgeDist(start){                       // min #streets from start to every edge (edges adjacent when they share a node)
@@ -1822,6 +1824,16 @@ function dijkstraKm(start){                        // min total street-km to con
     for (const ni of EDGES[e].i) for (const e2 of nodeEdges[ni]){ const nc=c+EDGES[e2].k; if(nc<cost[e2]){ cost[e2]=nc; push(nc,e2); } } }
   return cost;
 }
+function optimalPathKm(start, target){             // the km-shortest route as an ordered edge list (Dijkstra + back-pointers)
+  const cost = new Float64Array(EDGES.length).fill(Infinity), prev = new Int32Array(EDGES.length).fill(-1), heap = [];
+  const push=(c,e)=>{ heap.push([c,e]); let i=heap.length-1; while(i){ const p=(i-1)>>1; if(heap[p][0]<=heap[i][0])break; [heap[p],heap[i]]=[heap[i],heap[p]]; i=p; } };
+  const pop=()=>{ const top=heap[0], last=heap.pop(); if(heap.length){ heap[0]=last; let i=0; for(;;){ let l=2*i+1,r=l+1,s=i; if(l<heap.length&&heap[l][0]<heap[s][0])s=l; if(r<heap.length&&heap[r][0]<heap[s][0])s=r; if(s===i)break; [heap[s],heap[i]]=[heap[i],heap[s]]; i=s; } } return top; };
+  cost[start]=EDGES[start].k; push(cost[start], start);
+  while(heap.length){ const [c,e]=pop(); if(c>cost[e]) continue;
+    for (const ni of EDGES[e].i) for (const e2 of nodeEdges[ni]){ const nc=c+EDGES[e2].k; if(nc<cost[e2]){ cost[e2]=nc; prev[e2]=e; push(nc,e2); } } }
+  const path=[]; for (let e=target; e>=0; e=prev[e]) path.push(e);
+  return path.reverse();
+}
 function dailyPair(seed){                          // deterministic start + a target 8-14 streets away (same for everyone)
   const rand = rng(seed);                          // street-hops are coarse: the whole city is ~15 hops across
   for (let tries=0; tries<40; tries++){
@@ -1838,21 +1850,27 @@ function showDaily(){
   showModal(`<h2>${t("dailyTitle")}</h2>`+
     `<p class="big">${FR?"Même trajet pour tout le monde aujourd'hui : reliez la rue de départ à la rue cible 🎯 en nommant le moins de rues possible. Le chrono tourne !":"Same route for everyone today: connect the start street to the target 🎯 by naming as few streets as possible. The clock is running!"}</p>`+
     `<button class="primary" id="dStart">${t("dailyStart")}</button>`+
+    `<button class="ghost" id="dYesterday">${t("revealYest")}</button>`+
     `<button class="ghost" id="dCancel">${t("playFree")}</button>`);
   document.getElementById("dStart").onclick = startDaily;
+  document.getElementById("dYesterday").onclick = revealYesterday;
   document.getElementById("dCancel").onclick = closeModal;
+}
+function clearBoard(){                             // wipe all reveal/progress state (shared by the daily entry points)
+  edgeColor.fill(null); debugHidden.clear();
+  revEdge.fill(0); revNode.fill(0); revFace.fill(0);
+  revList.length=0; faceList.length=0; anim.length=0; frontier.clear();
+  revEdgeCount=0; revKm=0; revArea=0; arrKm.fill(0); arrArea.fill(0); arrCntN.fill(0); quaKm.fill(0); rivKm.fill(0);
+  lastPctMilestone=0; celebratedArr.clear(); celebratedQua.clear(); celebratedRive.clear();
+  disp.streets=0; disp.km=0; disp.area=0;
 }
 function startDaily(){
   closeModal();
   Sync.leave(true);                               // daily is solo: drop live channels but KEEP the room so exit rejoins it
   document.getElementById("room").style.display = "none";
-  edgeColor.fill(null); debugHidden.clear();
   daily = true; dailyEnded=false; streak=0; bestStreak=0;
   document.getElementById("guess").disabled = false;
-  revEdge.fill(0); revNode.fill(0); revFace.fill(0);
-  revList.length=0; faceList.length=0; anim.length=0; frontier.clear();
-  revEdgeCount=0; revKm=0; revArea=0; arrKm.fill(0); arrArea.fill(0); arrCntN.fill(0); quaKm.fill(0); rivKm.fill(0);
-  lastPctMilestone=0; celebratedArr.clear(); celebratedQua.clear(); celebratedRive.clear(); disp.streets=0; disp.km=0; disp.area=0;
+  clearBoard();
   setSide(false);
   const pair = dailyPair(todaySeed());
   dailyStart = pair.start; dailyTarget = pair.target; dailyOptimal = pair.optimal + 1;   // +1: start street counts too
@@ -1904,6 +1922,36 @@ function winDaily(){
   const text = `${t("result")(new Date().toISOString().slice(0,10))}\n${grid}\n${streets} ${t("streets")} (min ${dailyOptimal}) · ${km.toFixed(1)} ${t("km")} (min ${dailyOptimalKm.toFixed(1)}) · ${tstr}\n${link}`;
   document.getElementById("shareBtn").onclick = ()=> navigator.clipboard.writeText(text).then(()=>flash(t("copied"), true));
   document.getElementById("freeBtn").onclick = ()=>{ daily=false; closeModal(); location.reload(); };
+}
+function revealYesterday(){                        // spectator view: reveal the km-shortest route of yesterday's pair
+  closeModal();
+  Sync.leave(true);
+  document.getElementById("room").style.display = "none";
+  daily = true; dailyEnded = true; streak=0; bestStreak=0;   // ended: no timer, no guessing
+  document.getElementById("guess").disabled = true;
+  document.getElementById("timer").style.display = "none";
+  clearInterval(timerIv); if (dailyRAF){ cancelAnimationFrame(dailyRAF); dailyRAF=0; }
+  clearBoard();
+  setSide(false);
+  const pair = dailyPair(yesterdaySeed()), path = optimalPathKm(pair.start, pair.target);
+  dailyStart = pair.start; dailyTarget = pair.target;
+  let bb = null;
+  for (const e of path){ reveal(e, true); bb = bb ? bb.extend(edgeBounds(e)) : edgeBounds(e); }   // quiet reveal, no save
+  updateStats(true); fogDirty = true;
+  map.whenReady(()=> tweenTo(bb.getCenter(), zoomForBounds(bb, 90, 15), 600));
+  draw();
+  const FR = LANG==="fr";
+  showModal(`<h2>${t("revealYest")}</h2>`+
+    `<p class="big">${EDGES[pair.start].n} → <b>${EDGES[pair.target].n}</b></p>`+
+    `<div class="stats-grid">`+
+      `<div class="sg"><b>${pair.optimal+1}</b><span>min ${t("streets")}</span></div>`+
+      `<div class="sg"><b>${pair.optimalKm.toFixed(1)}</b><span>min ${t("km")}</span></div>`+
+    `</div>`+
+    `<p>${FR?"Le trajet le plus court en distance est révélé sur la carte.":"The shortest route by distance is revealed on the map."}</p>`+
+    `<button class="primary" id="yToday">${t("dailyStart")}</button>`+
+    `<button class="ghost" id="yFree">${t("playFree")}</button>`);
+  document.getElementById("yToday").onclick = startDaily;
+  document.getElementById("yFree").onclick = ()=>{ daily=false; closeModal(); location.reload(); };
 }
 
 // ---- feedback form --------------------------------------------------------
