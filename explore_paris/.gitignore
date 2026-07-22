@@ -32,3 +32,4 @@ sucettes/tessdata/
 # temporary sucette shape editor (not part of the deployed game)
 sucette_editor.html
 sucette_shape.json
+mathurins_debug.html

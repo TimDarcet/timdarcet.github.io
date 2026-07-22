@@ -7,12 +7,23 @@ separates real roads from paths/stairs, and official BAN names avoid OSM's typos
 OSM-specific front-end (EXCLUDE_HW guesswork, cycleway rescue, typo detection) is gone here — we
 just filter `troncon_de_route` by nature+name, clip to the Paris commune, and hand the segments to
 build.build_from_ways(), which planarizes and emits the identical window.PARIS contract."""
-import sys, glob, os
+import sys, glob, os, collections
 import geopandas as gpd
-from shapely.geometry import shape
+import shapely
+from shapely.geometry import shape, LineString
+from shapely.ops import unary_union
+from shapely.strtree import STRtree
 import build
 
 OUT = "paris.js"
+# BD TOPO leaves some real streets unnamed (e.g. the Opéra-side block of Rue des Mathurins). Fill those
+# from OSM: an unnamed segment adopts an OSM street's name only if it lies essentially ON that street AND
+# the name is one BD TOPO already uses elsewhere (so we only ever complete streets the base map knows,
+# never import OSM-only features). "On that street" = both: the segment's MEAN distance to the OSM line
+# is small (they're the same line, not a parallel neighbour) and its MAX distance is bounded (tolerating
+# one local bulge where the two surveys disagree, like the wide Mathurins-at-Opéra frontage).
+AVG_TOL = 2.0       # metres: mean inf-distance (segment -> OSM street)
+SUP_TOL = 10.0      # metres: max  inf-distance (directed Hausdorff)
 # BD TOPO `nature` values kept as streets. Sentier/Chemin/Escalier are included: they recover real
 # named pedestrian ways (park allées, villas, passages) AND repair connectivity — stairs/paths are
 # often the missing link between two stretches of the same street (like Ordener's cycleway block).
@@ -37,6 +48,54 @@ def expand_abbr(s):
         w = t.title() if t.isupper() else t          # Title-case ALL-CAPS body words
         tail.append(w.lower() if w in LOW else w)    # but lowercase French connectors
     return " ".join([head] + tail)
+
+def osm_donors(ign_named):
+    """OSM named streets eligible to donate a name: same filtering as an OSM build (build.py), then
+    the semantic gate — keep only names BD TOPO already uses (normalized). Returns (names, geoms@2154)."""
+    d = build.fetch()
+    nodes = {e["id"]: (e["lat"], e["lon"]) for e in d["elements"] if e["type"] == "node"}
+    def base_ok(hw, nm, t):
+        if not nm: return False
+        if t.get("footway") in {"sidewalk", "crossing", "traffic_island", "link"}: return False
+        if nm.startswith("Voie ") and "/" in nm: return False
+        if "parking" in nm.lower(): return False
+        return True
+    road_names = {t.get("name", "") for e in d["elements"] if e["type"] == "way"
+                  for t in [e["tags"]] if t.get("highway") not in build.EXCLUDE_HW and base_ok(t.get("highway"), t.get("name", ""), t)}
+    road_norms = {build.norm_name(x) for x in road_names}
+    osm = collections.defaultdict(list)
+    for e in d["elements"]:
+        if e["type"] != "way": continue
+        t = e["tags"]; hw = t.get("highway"); nm = t.get("name", "")
+        if not base_ok(hw, nm, t): continue
+        if hw in build.EXCLUDE_HW and not (hw == "cycleway" and build.keep_cycleway(nm, road_names, road_norms)): continue
+        if build.norm_name(nm) not in ign_named: continue           # semantic gate
+        pts = [(nodes[n][1], nodes[n][0]) for n in e["nodes"] if n in nodes]
+        if len(pts) >= 2: osm[nm].append(LineString(pts))
+    names = list(osm)
+    geoms = list(gpd.GeoSeries([unary_union(v) for v in osm.values()], crs=4326).to_crs(2154).values)
+    return names, geoms
+
+def recover_names(g, ign_named, avg_tol=AVG_TOL, sup_tol=SUP_TOL):
+    """Fill BD TOPO's unnamed road segments with an OSM street name when the segment lies essentially on
+    that street: mean inf-distance <= avg_tol AND max inf-distance <= sup_tol. Among qualifying donors,
+    pick the closest by mean. Mutates g['_nm'] in place; returns the count recovered."""
+    names, geoms = osm_donors(ign_named)
+    if not geoms: return 0
+    tree = STRtree(geoms)
+    unn = g[g["_nm"].isna()].to_crs(2154)
+    got = {}
+    for idx, seg in unn.geometry.items():
+        if seg is None or seg.length < 1: continue
+        pts = shapely.points(shapely.get_coordinates(seg.segmentize(1.0)))   # 1 m samples, handles Multi
+        best = None
+        for qi in tree.query(seg, predicate="dwithin", distance=sup_tol):
+            d = shapely.distance(pts, geoms[qi]); avg = float(d.mean()); sup = float(d.max())
+            if avg <= avg_tol and sup <= sup_tol and (best is None or avg < best[1]): best = (names[qi], avg)
+        if best: got[idx] = best[0]
+    if got: g.loc[list(got), "_nm"] = list(got.values())
+    print(f"recovered {len(got)} unnamed segments from OSM (mean<={avg_tol:.0f} m, sup<={sup_tol:.0f} m)", file=sys.stderr)
+    return len(got)
 
 def find_gpkg(arg):
     import py7zr
@@ -84,10 +143,12 @@ def main(arg, extra_nature=(), out=OUT):
     ban = g["nom_voie_ban_gauche"].fillna(g["nom_voie_ban_droite"]).fillna(g["cpx_toponyme_route_nommee"])
     col = g["nom_collaboratif_gauche"].fillna(g["nom_collaboratif_droite"]).map(expand_abbr)
     g["_nm"] = ban.fillna(col)
+    ign_named = {build.norm_name(x) for x in g["_nm"].dropna().unique() if str(x).strip()}
+    n_rec = recover_names(g, ign_named)                             # borrow OSM names for gap segments
     g = g[g["_nm"].notna() & (g["_nm"] != "")]
     g = g[~g["_nm"].str.contains(r"\b\w{1,3}/\d+\b", regex=True)]   # drop internal codes ("Voie M/18", "Vc Fi/13")
     n_ban = ban.notna().sum(); n_col = (ban.isna() & col.notna()).sum()
-    print(f"{len(g)} named road segments in Paris ({n_ban} BAN, {n_col} collaboratif-only)", file=sys.stderr)
+    print(f"{len(g)} named road segments in Paris ({n_ban} BAN, {n_col} collaboratif-only, {n_rec} OSM-recovered)", file=sys.stderr)
 
     # -> (name, [nodeid,...]) with a fresh nodeid per vertex; planarize() re-nodes shared points.
     ways, coord = [], {}

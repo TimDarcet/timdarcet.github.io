@@ -951,9 +951,9 @@ function renderFog(){
   }
   fogDirty = false;
 }
-function markerScale(){                             // junction/plaque/sucette markers scale with zoom (clamped), like the ink
+function markerScale(){                             // junction/plaque/sucette markers scale with zoom, like the ink.
   const mpp = 156543.03392 * Math.cos(map.getCenter().lat*Math.PI/180) / Math.pow(2, map.getZoom());
-  return Math.max(0.5, Math.min(3, (18/mpp)/6));
+  return Math.min(3, (18/mpp)/6);                   // capped above only — no floor, so zooming out shrinks them with the map
 }
 function draw(){
   if (!map || !PX) return;
