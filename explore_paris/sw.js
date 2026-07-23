@@ -1,10 +1,12 @@
 // Service worker: offline app shell + runtime tile cache. Bump CACHE to invalidate on deploy.
-const CACHE = "paris-v8";
+const CACHE = "paris-v9";
 const CACHE_PREFIX = "paris-";
 const SHELL = [
   "./",
   "./index.html",
   "./paris.js",
+  "./plaques.js",
+  "./sucettes.js",
   "./match.js",
   "./sync.js",
   "./icon.svg",
