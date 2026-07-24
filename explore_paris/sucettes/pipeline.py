@@ -16,6 +16,8 @@ CACHE, DATA, TESS = HERE/"cache", HERE/"data", HERE/"tessdata"
 CACHE.mkdir(exist_ok=True); DATA.mkdir(exist_ok=True)
 BBOX = (48.81, 2.22, 48.91, 2.47)                 # Paris + margin (S,W,N,E)
 PARIS_JS = HERE.parent/"paris.js"
+sys.path.insert(0, str(HERE.parent))              # lore_format.py lives in the repo root
+import lore_format as lf
 
 PROXY = os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy")
 def http(url, timeout=90, data=None):             # shell out to curl: the sandbox permits curl's network but not python's sockets.
@@ -313,6 +315,11 @@ def stage_merge():
             if base and any(len(base & o)/len(base) >= 0.5 for o in others): conf = "high"
         review.append({**{k: p[k] for k in ("osm","title","lat","lon")}, "sources": cand, "chosen": pick, "conf": conf})
         if pick: final.append({"lat":p["lat"],"lon":p["lon"],"t":p["title"],"r":cand[pick],"src":pick,"conf":conf})
+    # shared format pipeline (spacing, date ranges, ellipsis, quotes, accents): mostly a no-op on the clean
+    # VLM text, but flattens embedded newlines and normalises date ranges/ellipses; domain corpus = our texts.
+    lex = lf.load_lexique(str(HERE.parent/"lexique.tsv"))
+    reacc = lf.make_reaccent(lex, lf.domain_forms([f["r"] for f in final] + [f["t"] for f in final]))
+    for f in final: f["r"] = lf.format_text(f["r"], reacc); f["t"] = lf.format_text(f["t"], reacc)
     if final:
         eis = nearest_edges([(f["lat"],f["lon"]) for f in final])
         for f,ei in zip(final, eis): f["ei"]=ei

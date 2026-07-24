@@ -1,5 +1,5 @@
 // Service worker: offline app shell + runtime tile cache. Bump CACHE to invalidate on deploy.
-const CACHE = "paris-v9";
+const CACHE = "paris-v10";
 const CACHE_PREFIX = "paris-";
 const SHELL = [
   "./",
@@ -16,7 +16,10 @@ const SHELL = [
 ];
 
 self.addEventListener("install", e => {
-  e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)).then(() => self.skipWaiting()));
+  // {cache:"reload"} bypasses the browser HTTP cache, so a deploy never bakes a stale copy into the new cache
+  e.waitUntil(caches.open(CACHE).then(c =>
+    Promise.all(SHELL.map(u => fetch(u, { cache: "reload" }).then(r => r.ok && c.put(u, r)).catch(() => {})))
+  ).then(() => self.skipWaiting()));
 });
 self.addEventListener("activate", e => {
   e.waitUntil(
@@ -41,12 +44,13 @@ self.addEventListener("fetch", e => {
       })
     );
   } else {
-    // cache-first for the app shell, fall back to network then cache the result
+    // network-first for the app shell so code/data updates land immediately; cache is the offline fallback.
+    // (cache-first used to strand users on stale JS after a deploy — a bumped CACHE alone didn't help.)
     e.respondWith(
-      caches.match(req).then(hit => hit || fetch(req).then(res => {
-        if (res.ok && url.origin === location.origin) caches.open(CACHE).then(c => c.put(req, res.clone()));
+      fetch(req).then(res => {
+        if (res.ok && url.origin === location.origin){ const cp = res.clone(); caches.open(CACHE).then(c => c.put(req, cp)); }
         return res;
-      }).catch(() => hit))
+      }).catch(() => caches.match(req))
     );
   }
 });

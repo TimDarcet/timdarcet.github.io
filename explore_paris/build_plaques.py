@@ -8,12 +8,13 @@ window.PLAQUES = [{la, lo, t: title, r: text, a: address, ei: nearest edge index
   * r   – transcriptions are mostly SHOUTED IN CAPS on the real plaques; recase the predominantly
           uppercase ones to sentence case (one capital per sentence). Already-mixed text is left as-is.
 Raw API response is cached to plaques_raw.json so re-runs need no network."""
-import json, sys, os, re, unicodedata, urllib.request
+import json, sys, os, re, unicodedata, urllib.request, collections
 from shapely import STRtree
 from shapely.geometry import Point, LineString, MultiLineString
+import lore_format as lf
 
 URL = "https://opendata.paris.fr/api/explore/v2.1/catalog/datasets/plaques_commemoratives/exports/json"
-RAW, PARIS, OUT = "plaques_raw.json", "paris.js", "plaques.js"
+RAW, PARIS, OUT, LEXIQUE = "plaques_raw.json", "paris.js", "plaques.js", "lexique.tsv"
 
 def fetch():
     if os.path.exists(RAW): return json.load(open(RAW, encoding="utf-8"))
@@ -72,19 +73,27 @@ def main():
     recs = fetch()
     edges = json.loads(open(PARIS, encoding="utf-8").read().split("=", 1)[1].strip().rstrip(";"))["edges"]
     tree = STRtree(edge_geoms(edges))
+    # scrub + de-shout every field first, then run the shared format pipeline: the accent restorer needs
+    # a corpus of the plaques' own accented words for domain form-choice, so build it before formatting.
+    prepped = [(x, recap(clean(x.get("retranscription") or "")), clean(x.get("titre") or ""),
+                clean(x.get("adresse") or "")) for x in recs]
+    lex = lf.load_lexique(LEXIQUE)
+    domain = lf.domain_forms([t for _, r, t, a in prepped for t in (r, t, a)])
+    audit = collections.Counter(); reacc = lf.make_reaccent(lex, domain, audit)
+    fmt = lambda s: lf.format_text(s, reacc)
     out = []
-    for x in recs:
+    for x, r, t, a in prepped:
         c = coord(x)
         if not c: continue
-        t = clean(x.get("titre") or "")
-        r = recap(clean(x.get("retranscription") or ""))   # clean artifacts, then de-shout
+        t, r, a = fmt(t), fmt(r), fmt(a)
         if not (t or r): continue
         ei = int(tree.nearest(Point(c[1], c[0])))
-        out.append({"la": round(c[0], 5), "lo": round(c[1], 5), "t": t, "r": r,
-                    "a": clean(x.get("adresse") or ""), "ei": ei})
+        out.append({"la": round(c[0], 5), "lo": round(c[1], 5), "t": t, "r": r, "a": a, "ei": ei})
     with open(OUT, "w", encoding="utf-8") as f:
         f.write("window.PLAQUES="); json.dump(out, f, ensure_ascii=False, separators=(",", ":"))
-    print(f"wrote {len(out)}/{len(recs)} plaques to {OUT}", file=sys.stderr)
+    with open("lore_accent_audit.txt", "w", encoding="utf-8") as f:      # reviewable record of every accent change
+        for (b, r), n in audit.most_common(): f.write(f"{n}\t{b} -> {r}\n")
+    print(f"wrote {len(out)}/{len(recs)} plaques to {OUT}  ({sum(audit.values())} accent fixes, {len(audit)} unique)", file=sys.stderr)
 
 if __name__ == "__main__":
     main()

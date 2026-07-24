@@ -33,3 +33,8 @@ sucettes/tessdata/
 sucette_editor.html
 sucette_shape.json
 mathurins_debug.html
+
+# French lexical database (Lexique 3.83) for accent restoration — re-fetchable build input
+lexique.tsv
+# accent-restoration audit log (regenerated each build)
+lore_accent_audit.txt
