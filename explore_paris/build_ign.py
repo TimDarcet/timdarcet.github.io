@@ -7,7 +7,7 @@ separates real roads from paths/stairs, and official BAN names avoid OSM's typos
 OSM-specific front-end (EXCLUDE_HW guesswork, cycleway rescue, typo detection) is gone here — we
 just filter `troncon_de_route` by nature+name, clip to the Paris commune, and hand the segments to
 build.build_from_ways(), which planarizes and emits the identical window.PARIS contract."""
-import sys, glob, os, collections
+import sys, glob, os, re, collections
 import geopandas as gpd
 import shapely
 from shapely.geometry import shape, LineString
@@ -31,7 +31,7 @@ ROAD_NATURE = {"Route à 1 chaussée", "Route à 2 chaussées", "Type autoroutie
                "Rond-point", "Route empierrée", "Sentier", "Chemin", "Escalier"}
 # collaboratif names are UPPERCASE + type-abbreviated ("R DES ECLUSES"); expand the leading type word
 # and Title-case so they read like the BAN names. Only used to fill streets BAN doesn't name.
-ABBR = {"R": "Rue", "AV": "Avenue", "BD": "Boulevard", "PL": "Place", "ALL": "Allée", "IMP": "Impasse",
+ABBR = {"R": "Rue", "AV": "Avenue", "BD": "Boulevard", "PL": "Place", "ALL": "Allée", "ALLEE": "Allée", "PCHE": "Porche", "IMP": "Impasse",
         "SQ": "Square", "PAS": "Passage", "VLA": "Villa", "QU": "Quai", "CHE": "Chemin", "RTE": "Route",
         "CRS": "Cours", "SEN": "Sente", "GAL": "Galerie", "SNT": "Sentier", "PROM": "Promenade",
         "CAR": "Carrefour", "RPT": "Rond-point", "PRV": "Parvis", "HAM": "Hameau", "PTE": "Porte",
@@ -40,12 +40,16 @@ ABBR = {"R": "Rue", "AV": "Avenue", "BD": "Boulevard", "PL": "Place", "ALL": "Al
         "VOI": "Voie", "TUN": "Tunnel", "AUT": "Autoroute", "COR": "Corniche", "MAIL": "Mail"}
 def expand_abbr(s):
     if not isinstance(s, str) or not s: return s
+    s = re.sub(r"\(s\)", "", s, flags=re.I)          # drop BD TOPO's allée/allées plural marker ("ALLEE(S)")
     LOW = {"De", "Du", "Des", "La", "Le", "Les", "À", "A", "Aux", "Au", "En", "Et", "Sur", "D'", "L'"}
     toks = s.split()
     head = ABBR.get(toks[0].upper(), toks[0].capitalize()) if toks else ""
     tail = []
     for t in toks[1:]:
-        w = t.title() if t.isupper() else t          # Title-case ALL-CAPS body words
+        if t.isupper() and len(t) >= 3 and re.fullmatch(r"X{0,3}(IX|IV|V?I{0,3})", t):
+            w = t                                    # keep royal ordinals uppercase (VII, III, XIV -> not "Vii")
+        else:
+            w = t.title() if t.isupper() else t      # Title-case other ALL-CAPS body words
         tail.append(w.lower() if w in LOW else w)    # but lowercase French connectors
     return " ".join([head] + tail)
 
@@ -142,7 +146,7 @@ def main(arg, extra_nature=(), out=OUT):
     g = g[g.geometry.intersects(paris_poly)]
     ban = g["nom_voie_ban_gauche"].fillna(g["nom_voie_ban_droite"]).fillna(g["cpx_toponyme_route_nommee"])
     col = g["nom_collaboratif_gauche"].fillna(g["nom_collaboratif_droite"]).map(expand_abbr)
-    g["_nm"] = ban.fillna(col)
+    g["_nm"] = ban.fillna(col).str.replace(r"\s*\((?:[Dd]it|ex|anc\.?|ancien)[^)]*\)", "", regex=True).str.strip()  # drop alias parentheticals ("(Dit des Amandiers)")
     ign_named = {build.norm_name(x) for x in g["_nm"].dropna().unique() if str(x).strip()}
     n_rec = recover_names(g, ign_named)                             # borrow OSM names for gap segments
     g = g[g["_nm"].notna() & (g["_nm"] != "")]

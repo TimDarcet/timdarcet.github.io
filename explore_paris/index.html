@@ -50,8 +50,8 @@
            font-variant-numeric: tabular-nums; text-shadow: 0 1px 3px rgba(0,0,0,.6); }
   #stats b { color: #fff; font-weight: 700; font-family: "Fraunces", Georgia, serif; font-size: 15px; }
   #msg { position: fixed; left: 50%; top: 18px; transform: translateX(-50%); z-index: 600;
-         padding: 9px 18px; border-radius: 999px; font-size: 14px; font-weight: 600;
-         opacity: 0; transition: opacity .25s; pointer-events: none; white-space: nowrap;
+         padding: 9px 18px; border-radius: 16px; font-size: 14px; font-weight: 600;
+         opacity: 0; transition: opacity .25s; pointer-events: none; white-space: pre-line; text-align: center;
          background: #fff; box-shadow: 0 4px 14px rgba(20,28,40,.3); }
   #msg.ok  { color: #137333; border: 1px solid #34a853; }
   #msg.bad { color: #c5221f; border: 1px solid #ea4335; }
@@ -283,8 +283,9 @@ const I18N = {
     gArr: "Arr.", gQua: "Quartier", gRive: "Bank",
     riveDroite: "Right bank", riveGauche: "Left bank", iles: "Islands",
     ok: n=>"✓ "+n,
-    notAdjacent: "So close — that street isn't touching your explored area yet",
-    oneOff: `Almost — check your spelling and try again`,
+    hiddenMsg: n=>`◌ ${n} — exists but isn't connected to your area yet`,
+    typoMsg: "≈ close match nearby — check your spelling",
+    alreadyMsg: n=>`✓ ${n} — already explored`,
     noMatch: "Hmm — no street here by that name",
     alreadyThere: "Already explored ✓",
     noPair: "No single street joins just those two junctions",
@@ -329,8 +330,9 @@ const I18N = {
     gArr: "Arr.", gQua: "Quartier", gRive: "Rive",
     riveDroite: "Rive droite", riveGauche: "Rive gauche", iles: "Îles",
     ok: n=>"✓ "+n,
-    notAdjacent: "Presque — cette rue ne touche pas encore votre zone explorée",
-    oneOff: `Tout près — vérifiez l'orthographe et réessayez`,
+    hiddenMsg: n=>`◌ ${n} — existe mais pas encore reliée à votre zone`,
+    typoMsg: "≈ une rue au nom proche — vérifiez l'orthographe",
+    alreadyMsg: n=>`✓ ${n} — déjà exploré`,
     noMatch: "Hmm — aucune rue de ce nom ici",
     alreadyThere: "Déjà exploré ✓",
     noPair: "Aucune rue unique ne relie exactement ces deux carrefours",
@@ -483,9 +485,9 @@ function areaPolys(key, gi){                        // exact baked boundary (arr
   if (p && p.length) return p;
   const hull = areaHull(key, gi); return hull.length>=3 ? [hull] : [];
 }
-const edgesByName = new Map();                   // name -> edge indices, for healing by identity
-EDGES.forEach((e,i)=>{ const a=edgesByName.get(e.n); if(a) a.push(i); else edgesByName.set(e.n,[i]); });
-// Same-name merge: sections sharing an exact name AND coming within 250m are one street, revealed
+const edgesByName = new Map();                   // normalized name (core, prefix kept) -> edge indices
+EDGES.forEach((e,i)=>{ const k=core(e.n,false); const a=edgesByName.get(k); if(a) a.push(i); else edgesByName.set(k,[i]); });
+// Same-name merge: sections whose normalized name matches (so "…République"/"…Republique" unify) AND within 250m are one street, revealed
 // together (a street split by a gap). Farther same-name streets stay separate — e.g. the two
 // unrelated "Rue Michel-Ange" sit 3km apart. nameGroup[ei] = every edge merged with ei (incl. itself).
 const nameGroup = new Array(EDGES.length).fill(null);
@@ -513,7 +515,7 @@ const nameGroup = new Array(EDGES.length).fill(null);
 })();
 // re-resolve a saved [name, lat, lon] to the current best-matching edge (nearest same-named segment)
 function resolveStreet(name, lat, lon){
-  const c = edgesByName.get(name); if (!c) return -1;
+  const c = edgesByName.get(core(name, false)); if (!c) return -1;
   if (c.length===1) return c[0];
   let best=-1, bd=Infinity;
   for (const ei of c){ const p=edgePoint(ei), d=(p[0]-lat)**2+(p[1]-lon)**2; if(d<bd){bd=d;best=ei;} }
@@ -1250,9 +1252,9 @@ function renderAreaStats(){
 // ---- guessing -------------------------------------------------------------
 const msgEl = document.getElementById("msg");
 let msgTimer;
-function flash(text, ok){
+function flash(text, ok, ms=1600){
   msgEl.textContent=text; msgEl.className = ok?"ok":"bad"; msgEl.style.opacity=1;
-  clearTimeout(msgTimer); msgTimer=setTimeout(()=>msgEl.style.opacity=0, 1600);
+  clearTimeout(msgTimer); msgTimer=setTimeout(()=>msgEl.style.opacity=0, ms);
 }
 
 // ---- toast (milestones), streak flourish, confetti celebration ------------
@@ -1342,67 +1344,53 @@ function submitGuess(){
   const q = core(raw, false);
   if (q.length < 2) return;
   const md = ei => Math.min(...KEYS[ei].map(k => lev(q, k)));   // best edit distance across the edge's keys
-  const cand = new Set();
-  for(const ni of frontier) for(const ei of nodeEdges[ni]) if(!revEdge[ei]) cand.add(ei);
-  let best=-1, bestD=1e9;
-  for (const ei of cand){
-    if(!KEYS[ei].length) continue;
-    const d = md(ei);                          // edit distance against the edge's with/without-prefix keys
-    if (d < bestD){ bestD=d; best=ei; }
-  }
   const tol = 1;                               // accept the exact name plus or minus one typo
-  if (best>=0 && bestD<=tol){
-    // Fixed-point reveal: reveal every REACHABLE edge whose core matches the guess. reveal() itself
-    // pulls in each edge's merged same-name group (within 250m — see nameGroup). Revealing grows the
-    // frontier, so re-scan until a round reveals nothing — this chains connected streets (Rue d'Arcole
-    // -> Pont d'Arcole) while never dragging in a same-named but distant street (the two unrelated
-    // "Rue Michel-Ange", 3km apart, or Bd Malesherbes vs Cité Malesherbes).
-    const start = revList.length;  // everything revealed by this guess lands after here, in reveal order
-    let grew = true;
-    while (grew){
-      grew = false;
-      const reach = new Set();     // current frontier's unrevealed edges
-      for (const ni of frontier) for (const ei of nodeEdges[ni]) if (!revEdge[ei]) reach.add(ei);
-      for (const ei of reach) if (!revEdge[ei] && md(ei)<=tol){ reveal(ei); grew = true; }
-    }
-    const byName = new Map();      // revealed street name -> segment count
-    let bounds = null;             // union of all revealed sections, to grow the view once at the end
-    for (let i=start;i<revList.length;i++){ const k=revList[i];
-      byName.set(EDGES[k].n, (byName.get(EDGES[k].n)||0)+1);
-      bounds = bounds ? bounds.extend(edgeBounds(k)) : edgeBounds(k);
-    }
+  // Fixed-point reveal: reveal every REACHABLE edge whose key matches within tol. reveal() pulls each
+  // edge's <250m same-name group; revealing grows the frontier, so re-scan until a round adds nothing —
+  // this chains connected streets (Rue d'Arcole -> Pont d'Arcole) without dragging in a same-named but
+  // distant street (the two unrelated "Rue Michel-Ange", 3km apart).
+  const start = revList.length;
+  for (let grew=true; grew; ){
+    grew = false;
+    const reach = new Set();
+    for (const ni of frontier) for (const ei of nodeEdges[ni]) if (!revEdge[ei]) reach.add(ei);
+    for (const ei of reach) if (!revEdge[ei] && KEYS[ei].length && md(ei)<=tol){ reveal(ei); grew=true; }
+  }
+  // classify the outcome into independent buckets so we can report ALL that apply, not just the top one
+  const newIds = revList.slice(start), isNew = new Set(newIds);
+  const byName = new Map();                     // distinct streets revealed by THIS guess (name -> #segments)
+  let bounds = null;
+  for (const k of newIds){ byName.set(EDGES[k].n, (byName.get(EDGES[k].n)||0)+1);
+    bounds = bounds ? bounds.extend(edgeBounds(k)) : edgeBounds(k); }
+  const hidden = new Set(), already = new Set();  // exact-name matches: still-unreachable vs already-found
+  for (let i=0;i<KEYS.length;i++) if (KEYS[i].includes(q)){
+    if (!revEdge[i]) hidden.add(EDGES[i].n);
+    else if (!isNew.has(i) && !byName.has(EDGES[i].n)) already.add(EDGES[i].n);   // don't double-report a street we also just extended
+  }
+  let typo = false;                             // a reachable street ~2 typos away that we did NOT reveal
+  for (const ni of frontier){ for (const ei of nodeEdges[ni]) if (!revEdge[ei] && KEYS[ei].length && md(ei)===2){ typo=true; break; } if (typo) break; }
+  // glow every on-screen exact match we didn't just reveal, so you can spot what you meant under the fog
+  for (let i=0;i<KEYS.length;i++) if (KEYS[i].includes(q) && !isNew.has(i)) anim.push({type:"locate", ei:i, t:0});
+  if ((hidden.size || already.size) && !animRunning){ animRunning=true; requestAnimationFrame(animLoop); }
+  // one line per applicable case: each revealed street, the already-found ones, the unconnected exact
+  // ones, and a typo hint — so a correct-but-unconnected guess is never masked by a near-miss (feedback #7)
+  const lines = [];
+  for (const [nm,c] of byName) lines.push("✓ " + nm + (c>1 ? ` ×${c}` : ""));
+  if (already.size) lines.push(t("alreadyMsg")([...already].join(", ")));
+  if (hidden.size)  lines.push(t("hiddenMsg")([...hidden].join(", ")));
+  if (typo && !byName.size) lines.push(t("typoMsg"));
+  if (!lines.length) lines.push(t("noMatch"));
+  if (byName.size){                             // a real discovery: grow view, bump streak, check milestones
     if (bounds && !map.getBounds().contains(bounds)){
       const merged = map.getBounds().extend(bounds);
       tweenTo(merged.getCenter(), zoomForBounds(merged, 80, map.getZoom()), 500);
     }
     streak++; bestStreak=Math.max(bestStreak,streak);
     updateStats(); flourishStreak(); checkMilestones(); draw();
-    // one entry per distinct name, each keeping its own ×N for multi-segment streets
-    let m = "✓ " + [...byName].map(([nm,c]) => nm + (c>1 ? ` ×${c}` : "")).join(" · ");
-    if (streak>=5 && streak%5===0){ m += `  🔥 ${streak}!`; toast(`🔥 ${streak} ${t("streak")}!`); }
-    flash(m, true);
-    if (daily) checkDailyWin();                   // daily route: reaching the target ends the run
-  } else {
-    streak = 0; updateStats();
-    // glow every street on-screen whose name matches the guess, revealed or not, so you can always
-    // spot what you meant under the fog (no panning — only segments already on-screen).
-    const glow = ei => { anim.push({type:"locate", ei, t:0}); };
-    const already = [], hidden = [];
-    for (let i=0;i<KEYS.length;i++) if (KEYS[i].includes(q)){ (revEdge[i]?already:hidden).push(i); }
-    for (const ei of already.concat(hidden)) glow(ei);
-    if (already.length || hidden.length){
-      if (!animRunning){ animRunning = true; requestAnimationFrame(animLoop); }
-    }
-    if (already.length && !hidden.length){       // you already revealed this exact street
-      flash(t("alreadyThere"), true);
-    } else if (best>=0 && bestD<=2){             // near-miss on a reachable street: nudge, don't spoil
-      flash(t("oneOff"), false);
-    } else if (hidden.length){                   // real street, just not touching your area yet
-      flash(t("notAdjacent"), false);
-    } else {
-      flash(t("noMatch"), false);
-    }
-  }
+    if (streak>=5 && streak%5===0){ lines[0] += `  🔥 ${streak}!`; toast(`🔥 ${streak} ${t("streak")}!`); }
+    if (daily) checkDailyWin();                 // daily route: reaching the target ends the run
+  } else { streak = 0; updateStats(); }
+  flash(lines.join("\n"), byName.size>0 || (already.size>0 && !hidden.size), 1400 + lines.length*600);   // green if you found/had it
 }
 const history = [];                              // raw submitted guesses; ↑/↓ walks them
 let histPos = 0;
