@@ -1,0 +1,2147 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>exp.lore.paris</title>
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#1a73e8">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon.svg">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,700&display=swap" rel="stylesheet">
+<style>
+  :root { --hud-height: 96px; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; height: 100dvh; overflow: hidden; background: #e9edf2;
+               font-family: ui-sans-serif, system-ui, "Segoe UI", Roboto, sans-serif; }
+  #map { position: absolute; inset: 0; background: #e9edf2; }
+  #fog { position: absolute; inset: 0; z-index: 400; pointer-events: none; }
+  /* depth: soft inner shadow so the fogged map feels recessed under the clear areas */
+  #vignette { position: absolute; inset: 0; z-index: 401; pointer-events: none;
+    box-shadow: inset 0 0 180px 40px rgba(40,30,12,.34), inset 0 0 60px rgba(30,22,10,.18); }
+  /* paper grain over everything, very subtle (no blend-mode — avoids per-frame recompositing) */
+  #grain { position: absolute; inset: 0; z-index: 402; pointer-events: none; opacity: .06;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E"); }
+  #fx { position: absolute; inset: 0; z-index: 590; pointer-events: none; display: none; }
+  .leaflet-container { background: #e9edf2; }
+  .leaflet-control-attribution { font-size: 10px; background: rgba(255,255,255,.7); }
+  .leaflet-control-container .leaflet-top,
+  .leaflet-control-container .leaflet-bottom { z-index: 450; }
+  .leaflet-top.leaflet-left { top: calc(38px + env(safe-area-inset-top)); }
+  .leaflet-bottom.leaflet-left { bottom: calc(var(--hud-height) + 22px); }
+  #hud { position: fixed; left: 0; right: 0; bottom: 0; z-index: 500;
+         padding: 12px 14px calc(12px + env(safe-area-inset-bottom));
+         background: linear-gradient(to top, rgba(20,28,40,.55), rgba(20,28,40,.18) 60%, transparent);
+         display: flex; flex-direction: column; gap: 8px; align-items: center; }
+  #entry { display: flex; gap: 8px; width: min(560px, 94vw); }
+  #guess { flex: 1; background: #fff; border: 1px solid #cdd6e0; border-radius: 10px;
+           color: #1f2a37; font-size: 16px; padding: 12px 14px; outline: none;
+           box-shadow: 0 3px 10px rgba(20,28,40,.25); }
+  #guess::placeholder { color: #94a3b3; }
+  #guess:focus { border-color: #1a73e8; box-shadow: 0 0 0 3px rgba(26,115,232,.2), 0 3px 10px rgba(20,28,40,.25); }
+  #recenter, #reset { background: #fff; border: 1px solid #cdd6e0; border-radius: 10px; color: #1a73e8;
+              font-size: 18px; padding: 0 14px; cursor: pointer; box-shadow: 0 3px 10px rgba(20,28,40,.25); }
+  #recenter:hover { border-color: #1a73e8; }
+  #reset { color: #c5221f; } #reset:hover { border-color: #c5221f; }
+  #stats { display: flex; gap: 18px; flex-wrap: wrap; justify-content: center; font-size: 13px; color: #eef3f9;
+           font-variant-numeric: tabular-nums; text-shadow: 0 1px 3px rgba(0,0,0,.6); }
+  #stats b { color: #fff; font-weight: 700; font-family: "Fraunces", Georgia, serif; font-size: 15px; }
+  #msg { position: fixed; left: 50%; top: 18px; transform: translateX(-50%); z-index: 600;
+         padding: 9px 18px; border-radius: 16px; font-size: 14px; font-weight: 600;
+         opacity: 0; transition: opacity .25s; pointer-events: none; white-space: pre-line; text-align: center;
+         background: #fff; box-shadow: 0 4px 14px rgba(20,28,40,.3); }
+  #msg.ok  { color: #137333; border: 1px solid #34a853; }
+  #msg.bad { color: #c5221f; border: 1px solid #ea4335; }
+  #title { position: fixed; left: 14px; top: 12px; z-index: 500; color: #fff; font-size: 13px; letter-spacing: 1px;
+           text-shadow: 0 1px 4px rgba(0,0,0,.7); background: rgba(20,28,40,.45); padding: 5px 10px; border-radius: 8px; }
+  #version { position: fixed; left: 10px; bottom: calc(var(--hud-height) + 6px); z-index: 500;
+             color: rgba(255,255,255,.82); background: rgba(20,28,40,.5); border-radius: 5px;
+             padding: 2px 5px; font: 10px ui-monospace, monospace; text-shadow: 0 1px 2px rgba(0,0,0,.6); }
+  #debug { position: fixed; left: 52px; top: 46px; z-index: 550; display: none; max-height: 60vh; overflow-y: auto;
+           width: 260px; background: rgba(20,28,40,.92); color: #dde6f2; border: 1px solid #4b5f7a; border-radius: 8px;
+           padding: 8px 10px; font-size: 12px; font-family: ui-monospace, monospace; box-shadow: 0 4px 14px rgba(0,0,0,.4); }
+  #debug .dh { font-weight: 700; color: #c4b5fd; margin-bottom: 4px; font-family: ui-sans-serif, system-ui; }
+  #debug .dt { color: #ff9aa6; } #debug .dd { color: #7dd8a0; }
+  #edgepanel { position: fixed; right: 12px; bottom: 88px; z-index: 560; display: none; width: 220px;
+           max-height: calc(100vh - 180px); overflow-y: auto;
+           background: rgba(20,28,40,.94); color: #dde6f2; border: 1px solid #4b5f7a; border-radius: 10px;
+           padding: 10px 12px; font-size: 12px; font-family: ui-sans-serif, system-ui; box-shadow: 0 4px 14px rgba(0,0,0,.45); }
+  #edgepanel h4 { font-size: 12px; color: #c4b5fd; margin-bottom: 6px; }
+  #edgepanel label { display: flex; align-items: center; gap: 8px; margin: 6px 0; }
+  #edgepanel label span { width: 72px; color: #9fb2c9; }
+  #edgepanel input[type=range] { flex: 1; }
+  #edgepanel .v { width: 40px; text-align: right; color: #eaf2ff; font-variant-numeric: tabular-nums; }
+  /* unified right sidebar: recent finds + per-arrondissement progress. Slides in via the ▤ chip;
+     open by default on desktop, folded on mobile. */
+  #side { position: fixed; right: 12px; top: 54px; z-index: 555; width: 210px; max-height: calc(100vh - 260px);
+          overflow-y: auto; background: rgba(20,28,40,.94); color: #dde6f2; border: 1px solid #3a4a60; border-radius: 10px;
+          padding: 10px 12px; font-size: 11px; font-family: ui-sans-serif, system-ui; box-shadow: 0 8px 24px rgba(0,0,0,.4);
+          transform: translateX(120%); opacity: 0; pointer-events: none; transition: transform .22s ease, opacity .22s; }
+  #side.open { transform: translateX(0); opacity: 1; pointer-events: auto; }
+  #side .ah { font-weight: 700; color: #cfe0f5; margin: 0 0 6px; letter-spacing: .3px; }
+  #hist { margin-bottom: 12px; }
+  #hist .hrow { display: flex; align-items: center; gap: 7px; width: 100%; text-align: left; background: none; border: 0;
+                border-radius: 6px; padding: 4px 5px; margin: 1px 0; color: #dde6f2; font: inherit; cursor: pointer; }
+  #hist .hrow:hover { background: rgba(255,255,255,.09); }
+  #hist .hdot { width: 9px; height: 9px; border-radius: 50%; flex: none; box-shadow: 0 0 0 1px rgba(0,0,0,.3); }
+  #hist .hn { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #hist .hnum { color: #9fb2c9; font-variant-numeric: tabular-nums; flex: none; }
+  #hist .hempty { color: #8394a8; font-style: italic; padding: 2px 5px; }
+  #side .gtabs { display: flex; gap: 4px; margin-bottom: 9px; }
+  #side .gtab { flex: 1; background: rgba(255,255,255,.06); border: 1px solid #3a4a60; color: #9fb2c9;
+                border-radius: 7px; padding: 5px 2px; font: inherit; font-size: 10.5px; cursor: pointer; }
+  #side .gtab:hover { color: #dde6f2; }
+  #side .gtab.active { background: #1a73e8; border-color: #1a73e8; color: #fff; font-weight: 700; }
+  #arr { margin-bottom: 12px; }
+  #arr .arow { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 2px 6px; margin: 4px 0;
+               font-variant-numeric: tabular-nums; }
+  #arr .al { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #cfe0f5; }
+  #arr .ap { text-align: right; color: #eaf2ff; }
+  #arr .abar { grid-column: 1 / -1; height: 6px; background: rgba(255,255,255,.08); border-radius: 4px; overflow: hidden; }
+  #arr .abar span { display: block; height: 100%; background: linear-gradient(90deg,#1a73e8,#4aa3ff); border-radius: 4px; }
+  #arrBtn.on { background: #1a73e8; color: #fff; border-color: #1a73e8; }
+  /* commemorative-plaque lore tooltip */
+  #plaqueTip { position: fixed; z-index: 605; display: none; max-width: 300px; pointer-events: none;
+               background: rgba(28,20,12,.95); color: #f4ead9; border: 1px solid #b58a4e; border-radius: 10px;
+               padding: 9px 12px; font-size: 12.5px; line-height: 1.4; box-shadow: 0 6px 20px rgba(0,0,0,.45); }
+  #plaqueTip b { display: block; font-family: "Fraunces", Georgia, serif; font-size: 14px; color: #ffd98a; margin-bottom: 3px; }
+  #plaqueTip .padr { display: block; margin-top: 5px; font-size: 11px; color: #bfa77f; }
+  /* room panel: always-visible code + peers + a box to merge another room. Bottom-right, above the HUD */
+  /* room panel: drawn directly on the map (no box), bottom-right above the HUD */
+  #room { position: fixed; right: 12px; bottom: calc(112px + env(safe-area-inset-bottom)); z-index: 555; width: 190px;
+          font-size: 12px; font-family: ui-sans-serif, system-ui; text-align: right;
+          text-shadow: 0 1px 3px rgba(255,255,255,.9), 0 0 2px rgba(255,255,255,.9); }
+  #room .rhdr { display: flex; align-items: center; gap: 6px; justify-content: flex-end; }
+  #room .code { font-family: ui-monospace, monospace; font-weight: 700; font-size: 14px; letter-spacing: .5px;
+                cursor: pointer; color: #12325f; background: transparent; border: 0; padding: 0; }
+  #room .code:hover { color: #1a73e8; }
+  #room .rcount { color: #46566b; font-variant-numeric: tabular-nums; }
+  #room .me { display: flex; align-items: center; gap: 6px; margin-top: 5px; justify-content: flex-end; }
+  #room .me i { width: 10px; height: 10px; border-radius: 50%; flex: none; box-shadow: 0 0 0 1px rgba(0,0,0,.25); order: 2; }
+  #room .me input { flex: 0 1 auto; min-width: 0; width: 130px; text-align: right; background: transparent;
+                    border: 1px solid transparent; border-radius: 6px; padding: 3px 6px; font: inherit;
+                    font-weight: 600; color: #12325f; outline: none; order: 1; }
+  #room .me input::placeholder { color: #6a7684; font-weight: 400; }
+  #room .me input:hover { border-color: #cdd6e0; }
+  #room .me input:focus { background: #fff; border-color: #1a73e8; text-shadow: none; }
+  #room .peers { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 5px; justify-content: flex-end; }
+  #room .peers .peer { width: 10px; height: 10px; border: 0; padding: 0; border-radius: 50%; display: inline-block;
+                       box-shadow: 0 0 0 1px rgba(0,0,0,.25); cursor: pointer; }
+  #room .merge { margin-top: 6px; }
+  #room .merge input { width: 100%; background: rgba(255,255,255,.85); border: 1px solid #cdd6e0; border-radius: 7px;
+                       padding: 6px 8px; font-size: 12px; color: #1f2a37; outline: none; text-align: right; text-shadow: none; }
+  #room .merge input:focus { border-color: #1a73e8; background: #fff; }
+  #title b { font-weight: 700; letter-spacing: .5px; font-family: "Fraunces", Georgia, serif; }
+  #toast { position: fixed; left: 50%; top: 64px; transform: translateX(-50%) translateY(-8px); z-index: 620;
+           opacity: 0; transition: opacity .3s, transform .3s; pointer-events: none; white-space: nowrap;
+           font-family: "Fraunces", Georgia, serif; font-weight: 700; font-size: 17px; color: #3a2c10;
+           background: linear-gradient(180deg,#ffe8ac,#ffcf5c); padding: 9px 20px; border-radius: 999px;
+           box-shadow: 0 6px 20px rgba(120,80,10,.4), inset 0 1px 0 rgba(255,255,255,.6); border: 1px solid #e0a92e; }
+  #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+  @keyframes strkpop { 0%{ transform: scale(1);} 40%{ transform: scale(1.5);} 100%{ transform: scale(1);} }
+  .strk.pop b { display: inline-block; animation: strkpop .45s ease; }
+  #topright { position: fixed; right: 12px; top: 12px; z-index: 560; display: flex; gap: 6px; }
+  .chip { width: 34px; height: 34px; border-radius: 9px; border: 1px solid #cdd6e0; background: rgba(255,255,255,.94);
+          color: #1a73e8; font-size: 15px; font-weight: 700; cursor: pointer; box-shadow: 0 2px 8px rgba(20,28,40,.25);
+          display: flex; align-items: center; justify-content: center; }
+  .chip:hover { border-color: #1a73e8; }
+  #timer { position: fixed; left: 50%; top: 12px; transform: translateX(-50%); z-index: 560; display: none;
+           font-variant-numeric: tabular-nums; font-weight: 800; font-size: 20px; color: #fff; letter-spacing: 1px;
+           background: rgba(197,34,31,.92); padding: 6px 16px; border-radius: 999px; box-shadow: 0 3px 12px rgba(0,0,0,.35); }
+  #timer.warn { background: rgba(180,20,20,.96); animation: pulse .8s infinite; }
+  @keyframes pulse { 0%,100%{ transform: translateX(-50%) scale(1); } 50%{ transform: translateX(-50%) scale(1.08); } }
+  .strk { color: #ffcf5c !important; } .strk b { color: #ffe08a; }
+  #overlay { position: fixed; inset: 0; z-index: 800; display: none; align-items: center; justify-content: center;
+             background: rgba(12,18,28,.62); backdrop-filter: blur(3px); padding: 16px; }
+  #modal { background: #fff; color: #1f2a37; border-radius: 16px; max-width: 460px; width: 100%; padding: 24px;
+           box-shadow: 0 18px 50px rgba(0,0,0,.4); max-height: 88vh; overflow-y: auto; }
+  #modal h2 { font-size: 24px; margin-bottom: 14px; color: #12325f; font-family: "Fraunces", Georgia, serif; }
+  #modal p, #modal li { font-size: 14.5px; line-height: 1.5; margin-bottom: 10px; color: #33414f; }
+  #modal .big { text-align: center; font-size: 15px; }
+  #modal button.primary { width: 100%; margin-top: 10px; background: #1a73e8; color: #fff; border: none;
+           border-radius: 10px; padding: 13px; font-size: 16px; font-weight: 700; cursor: pointer; }
+  #modal button.primary:hover { background: #1560c9; }
+  #modal button.ghost { width: 100%; margin-top: 8px; background: #fff; color: #46566b; border: 1px solid #cdd6e0;
+           border-radius: 10px; padding: 11px; font-size: 14px; font-weight: 600; cursor: pointer; }
+  #modal .share { font-family: ui-monospace, monospace; white-space: pre; background: #f4f6f9; border: 1px solid #dde3ea;
+           border-radius: 10px; padding: 12px; font-size: 13px; margin: 8px 0; text-align: center; line-height: 1.35; }
+  #modal .stats-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 12px 0; }
+  #modal .sg { background: #f4f6f9; border-radius: 10px; padding: 10px 12px; }
+  #modal .sg b { font-size: 24px; color: #12325f; display: block; font-family: "Fraunces", Georgia, serif; }
+  #modal .sg span { font-size: 12px; color: #6a7684; }
+  #modal input, #modal textarea { width: 100%; border: 1px solid #cdd6e0; border-radius: 10px; padding: 10px;
+           font-size: 14px; font-family: inherit; margin-bottom: 8px; }
+  #modal textarea { min-height: 90px; resize: vertical; }
+  #modal .credit { margin-top: 14px; padding-top: 12px; border-top: 1px solid #e6eaf0; font-size: 12.5px;
+                   color: #6a7684; text-align: center; margin-bottom: 0; }
+  #modal .credit a { color: #1a73e8; }
+  #loading { position: fixed; inset: 0; z-index: 700; display: flex; align-items: center; justify-content: center;
+             color: #46566b; font-size: 16px; background: #e9edf2; }
+  .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden;
+             clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
+  button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 3px solid rgba(26,115,232,.45); outline-offset: 2px; }
+  /* mobile: tighten HUD, shrink chips, keep everything clear of the map controls & notch */
+  @media (max-width: 620px){
+    #stats { gap: 10px 12px; font-size: 11.5px; }
+    #stats b { font-size: 13px; }
+    #title { font-size: 11px; padding: 4px 8px; top: calc(8px + env(safe-area-inset-top)); }
+    #topright { top: calc(8px + env(safe-area-inset-top)); right: 8px; gap: 4px; }
+    .chip { width: 30px; height: 30px; font-size: 14px; }
+    #guess { font-size: 16px; padding: 11px 12px; }   /* 16px avoids iOS zoom-on-focus */
+    #recenter, #reset { padding: 0 11px; font-size: 16px; }
+    #toast { font-size: 15px; top: calc(52px + env(safe-area-inset-top)); }
+    #timer { top: calc(48px + env(safe-area-inset-top)); font-size: 17px; }
+    #modal { padding: 18px; border-radius: 14px; }
+    #modal h2 { font-size: 20px; }
+    #side { top: calc(46px + env(safe-area-inset-top)); width: min(210px, 64vw); }
+  }
+</style>
+</head>
+<body>
+<div id="map" role="region" aria-label="Interactive map of Paris"></div>
+<canvas id="fog" aria-hidden="true"></canvas>
+<div id="grain"></div>
+<div id="vignette"></div>
+<svg width="0" height="0" style="position:absolute"><defs>
+  <filter id="fogEdge" x="-50%" y="-50%" width="200%" height="200%" color-interpolation-filters="sRGB">
+    <feTurbulence id="fturb" type="fractalNoise" baseFrequency="0.008" numOctaves="4" seed="11" result="noise"/>
+    <feDisplacementMap id="fdisp" in="SourceGraphic" in2="noise" scale="40"
+                       xChannelSelector="R" yChannelSelector="G" result="disp"/>
+    <feGaussianBlur id="fblur" in="disp" stdDeviation="1"/>
+  </filter>
+</defs></svg>
+<div id="title"><b>exp.lore.paris</b> · <span id="subtitle">rue par rue</span></div>
+<div id="version" aria-label="Game version"></div>
+<div id="topright">
+  <button id="arrBtn" class="chip" title="Progress by arrondissement" aria-label="Progress by arrondissement" aria-expanded="false">▤</button>
+  <button id="langBtn" class="chip" title="Language" aria-label="Language">FR</button>
+  <button id="rulesBtn" class="chip" title="How to play" aria-label="How to play">?</button>
+  <button id="dailyBtn" class="chip" title="Daily challenge" aria-label="Daily challenge">◷</button>
+  <button id="fbBtn" class="chip" title="Feedback" aria-label="Feedback">✎</button>
+</div>
+<div id="timer" role="timer"></div>
+<div id="room"></div>
+<div id="debug"></div>
+<div id="edgepanel"></div>
+<aside id="side" aria-label="Progress and recent finds">
+  <div id="arr"></div>
+  <div id="hist"></div>
+</aside>
+<div id="msg" role="status" aria-live="polite"></div>
+<div id="plaqueTip" role="tooltip"></div>
+<div id="hud">
+  <div id="stats"></div>
+  <div id="entry">
+    <input id="guess" type="text" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false"
+           aria-label="Street name" placeholder="Name a street touching a revealed junction…">
+    <button id="recenter" title="Recenter on discoveries" aria-label="Recenter on discoveries">⌖</button>
+    <button id="reset" title="Reset progress" aria-label="Reset progress">↺</button>
+  </div>
+</div>
+<!-- modal overlay (rules / daily / result / feedback) -->
+<div id="overlay"><div id="modal" role="dialog" aria-modal="true" tabindex="-1"></div></div>
+<div id="toast" role="status" aria-live="polite"></div>
+<canvas id="fx" aria-hidden="true"></canvas>
+<div id="loading" role="status">Loading map of Paris…</div>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="paris.js"></script>
+<script src="plaques.js"></script>
+<script src="sucettes.js"></script>
+<script src="match.js"></script>
+<script src="sync.js"></script>
+<script>
+const APP_VERSION = "v8";
+document.getElementById("version").textContent = APP_VERSION;
+const hudEl = document.getElementById("hud");
+function syncHudHeight(){ document.documentElement.style.setProperty("--hud-height", hudEl.offsetHeight + "px"); }
+if (window.ResizeObserver) new ResizeObserver(syncHudHeight).observe(hudEl);
+else window.addEventListener("resize", syncHudHeight);
+requestAnimationFrame(syncHudHeight);
+
+const D = window.PARIS, NODES = D.nodes, EDGES = D.edges;
+const PLAQUES = window.PLAQUES || [];            // commemorative plaques (opendata.paris.fr): hoverable lore dots
+const SUCETTES = window.SUCETTES || [];          // "Histoire de Paris" Starck panels: pelle-shaped lore markers
+// sucette silhouette from sucette_editor.html — right-half points (x=half-width, y=height, bottom→top), mirrored when drawn
+const SUCETTE_SHAPE = [[0.143,0.002],[0.207,0.106],[0.5,0.321],[0.643,0.437],[0.736,0.57],[0.821,0.753],[0.836,0.954],[0,0.964]];
+const SUCETTE_BAND = 0.85;                        // height fraction of the red "Histoire de Paris" band
+const TOTAL_KM = EDGES.reduce((s,e)=>s+e.k, 0);
+
+// ---- i18n (french / english) ----------------------------------------------
+const I18N = {
+  en: {
+    subtitle: "street by street", debugMode: "debug mode (D)",
+    placeholder: "Name a street touching a glowing junction…",
+    recenter: "Recenter on discoveries", reset: "Reset progress",
+    lang: "Français", rules: "How to play", feedback: "Feedback",
+    mapLabel: "Interactive map of Paris", versionLabel: "Game version",
+    streets: "streets", km: "km", area: "km²", reachable: "reachable now",
+    streak: "streak", byArr: "By arrondissement", dayStreak: "day streak",
+    recent: "Recent finds", recentEmpty: "Streets you find will appear here", panel: "Progress & recent finds",
+    gArr: "Arr.", gQua: "Quartier", gRive: "Bank",
+    riveDroite: "Right bank", riveGauche: "Left bank", iles: "Islands",
+    ok: n=>"✓ "+n,
+    hiddenMsg: n=>`◌ ${n} — exists but isn't connected to your area yet`,
+    typoMsg: "≈ close match nearby — check your spelling",
+    alreadyMsg: n=>`✓ ${n} — already explored`,
+    noMatch: "Hmm — no street here by that name",
+    alreadyThere: "Already explored ✓",
+    noPair: "No single street joins just those two junctions",
+    blockDone: "Block cleared! ▪",
+    rulesTitle: "exp.lore.paris",
+    rulesBody: [
+      "🗺️ The city is under fog. Reveal it street by street from memory.",
+      "✏️ Type the name of any street touching a <b>glowing junction</b>, then Enter. Prefixes (rue, boulevard…) and accents are optional; one typo is forgiven.",
+      "🔗 Click two junctions to reveal the street connecting exactly those two.",
+      "▪️ Enclose a block on all sides and its interior clears automatically.",
+      "↑ recalls your last guess · drag/scroll to move · ⌖ recenters · D toggles debug.",
+    ],
+    rulesStart: "Start exploring",
+    dailyTitle: "Daily route", dailyStart: "Start the route", revealYest: "Yesterday's best route",
+    yestStreets: "Fewest streets", yestKm: "Shortest (km)",
+    dailyOver: "Time!", playFree: "Free play", share: "Copy result",
+    copied: "Copied to clipboard!", daily: "Daily route", timeLeft: "left",
+    result: n=>`Paris daily route — ${n}`,
+    startTitle: "Where to begin?",
+    startBody: "You're not in Paris — pick a starting point and reveal outward from there.",
+    startTypes: [["landmark","A famous spot"],["random","Surprise me"]],
+    startPlaces: [
+      ["Notre-Dame", 48.8530, 2.3499], ["Tour Eiffel", 48.8574, 2.2946],
+      ["Arc de Triomphe", 48.8738, 2.2950], ["Louvre", 48.8606, 2.3376],
+      ["Sacré-Cœur", 48.8867, 2.3431], ["Bastille", 48.8532, 2.3692],
+      ["Panthéon", 48.8462, 2.3464], ["République", 48.8675, 2.3636],
+    ],
+    startGo: "Start here",
+    copyInvite: "Copy invite link", mergePlaceholder: "Merge a room…", yourName: "Your name",
+    joinFailed: "Couldn't join — check your connection", found: (who,n)=>`${who} found ${n}`, youJoined: c=>`Joined room ${c}`,
+    credit: `Inspired by <a href="https://memory.pour.paris" target="_blank" rel="noopener">Paris de tête</a> by Benjamin Tran Dinh.`,
+  },
+  fr: {
+    subtitle: "rue par rue", debugMode: "mode debug (D)",
+    placeholder: "Nommez une rue touchant un carrefour lumineux…",
+    recenter: "Recentrer sur les découvertes", reset: "Réinitialiser",
+    lang: "English", rules: "Règles du jeu", feedback: "Votre avis",
+    mapLabel: "Carte interactive de Paris", versionLabel: "Version du jeu",
+    streets: "rues", km: "km", area: "km²", reachable: "accessibles",
+    streak: "série", byArr: "Par arrondissement", dayStreak: "jours d'affilée",
+    recent: "Découvertes récentes", recentEmpty: "Les rues trouvées s'afficheront ici", panel: "Progression & découvertes",
+    gArr: "Arr.", gQua: "Quartier", gRive: "Rive",
+    riveDroite: "Rive droite", riveGauche: "Rive gauche", iles: "Îles",
+    ok: n=>"✓ "+n,
+    hiddenMsg: n=>`◌ ${n} — existe mais pas encore reliée à votre zone`,
+    typoMsg: "≈ une rue au nom proche — vérifiez l'orthographe",
+    alreadyMsg: n=>`✓ ${n} — déjà exploré`,
+    noMatch: "Hmm — aucune rue de ce nom ici",
+    alreadyThere: "Déjà exploré ✓",
+    noPair: "Aucune rue unique ne relie exactement ces deux carrefours",
+    blockDone: "Îlot dévoilé ! ▪",
+    rulesTitle: "exp.lore.paris",
+    rulesBody: [
+      "🗺️ La ville est sous le brouillard. Dévoilez-la rue par rue, de mémoire.",
+      "✏️ Tapez le nom d'une rue touchant un <b>carrefour lumineux</b>, puis Entrée. Les préfixes (rue, boulevard…) et accents sont optionnels ; une faute est tolérée.",
+      "🔗 Cliquez deux carrefours pour révéler la rue reliant exactement ces deux-là.",
+      "▪️ Encerclez un îlot de tous côtés et son intérieur se dévoile automatiquement.",
+      "↑ rappelle votre dernière saisie · glisser/molette pour bouger · ⌖ recentre · D pour le debug.",
+    ],
+    rulesStart: "Commencer",
+    dailyTitle: "Trajet du jour", dailyStart: "Lancer le trajet", revealYest: "Meilleur trajet d'hier",
+    yestStreets: "Moins de rues", yestKm: "Plus court (km)",
+    dailyOver: "Temps écoulé !", playFree: "Jeu libre", share: "Copier le résultat",
+    copied: "Copié dans le presse-papier !", daily: "Trajet du jour", timeLeft: "restant",
+    result: n=>`Trajet du jour — ${n}`,
+    startTitle: "Par où commencer ?",
+    startBody: "Vous n'êtes pas à Paris — choisissez un point de départ et dévoilez la ville à partir de là.",
+    startTypes: [["landmark","Un lieu célèbre"],["random","Au hasard"]],
+    startPlaces: [
+      ["Notre-Dame", 48.8530, 2.3499], ["Tour Eiffel", 48.8574, 2.2946],
+      ["Arc de Triomphe", 48.8738, 2.2950], ["Louvre", 48.8606, 2.3376],
+      ["Sacré-Cœur", 48.8867, 2.3431], ["Bastille", 48.8532, 2.3692],
+      ["Panthéon", 48.8462, 2.3464], ["République", 48.8675, 2.3636],
+    ],
+    startGo: "Commencer ici",
+    copyInvite: "Copier le lien d'invitation", mergePlaceholder: "Fusionner un salon…", yourName: "Votre nom",
+    joinFailed: "Connexion impossible — vérifiez votre réseau", found: (who,n)=>`${who} a trouvé ${n}`, youJoined: c=>`Salon ${c} rejoint`,
+    credit: `Inspiré par <a href="https://memory.pour.paris" target="_blank" rel="noopener">Paris de tête</a> de Benjamin Tran Dinh.`,
+  },
+};
+let LANG = localStorage.getItem("paris-lang") || (navigator.language||"en").slice(0,2);
+if (!I18N[LANG]) LANG = "en";
+const t = k => I18N[LANG][k];
+function setLang(l){ LANG=l; localStorage.setItem("paris-lang", l); applyLang(); }
+
+// ---- fuzzy matching (core/lev/STRIP live in match.js) ---------------------
+const KEYS = EDGES.map(e=>[...new Set([core(e.n), core(e.n,false)])].filter(k=>k));  // each name keyed with AND without its prefix
+
+// ---- game state -----------------------------------------------------------
+const FACES = D.faces || [];
+const nodeEdges = NODES.map(()=>[]);            // node index -> edge indices touching it
+EDGES.forEach((e,ei)=> e.i.forEach(ni=> nodeEdges[ni].push(ei)));
+const edgeFaces = EDGES.map(()=>[]);            // edge index -> face indices it bounds
+FACES.forEach((f,fi)=> f.e.forEach(ei=> edgeFaces[ei].push(fi)));
+const pairEdge = new Map();                      // "nodeA,nodeB" -> edge index (street joining exactly those two)
+EDGES.forEach((e,ei)=>{ if(e.i.length===2) pairEdge.set(e.i[0]+","+e.i[1], ei); });
+const revEdge = new Uint8Array(EDGES.length);   // revealed edges
+const revNode = new Uint8Array(NODES.length);   // revealed junctions
+const revFace = new Uint8Array(FACES.length);   // fully-enclosed blocks revealed
+const revList = [];                             // revealed edge indices, reveal order
+const faceList = [];                            // revealed face indices, for drawing
+const frontier = new Set();                     // revealed nodes that still have an unrevealed edge (drawn/clickable)
+let revEdgeCount = 0, revKm = 0, revArea = 0, flashEdge = -1, flashT = 0;
+let streak = 0, bestStreak = 0;                 // consecutive correct guesses
+const anim = [];                                // active reveal draw-on / fill animations
+// multiplayer: per-edge finder colour (null = solo/own default ink), remote-apply guard, room roster
+const edgeColor = new Array(EDGES.length).fill(null);
+let applyingRemote = false, roster = {}, remoteColor = null;
+
+// ---- totals + progress, overall and per arrondissement --------------------
+const ARR = D.arr || [];
+const TOTAL_AREA = FACES.reduce((s,f)=>s+(f.m||0), 0);     // m²
+// per-arr denominators; index ARR.length is the "unassigned / outside" bucket
+const NB = ARR.length;
+const arrTotKm = new Float64Array(NB+1), arrTotArea = new Float64Array(NB+1);
+const arrTotN = new Int32Array(NB+1), arrCntN = new Int32Array(NB+1);
+const arrKm = new Float64Array(NB+1), arrArea = new Float64Array(NB+1);
+const ai = e => (e.a>=0 && e.a<NB) ? e.a : NB;
+EDGES.forEach(e=>{ const k=ai(e); arrTotKm[k]+=e.k; arrTotN[k]++; });
+FACES.forEach(f=>{ const k=(f.a>=0&&f.a<NB)?f.a:NB; arrTotArea[k]+=f.m||0; });
+// per-quartier revealed km, for the "neighborhood complete" celebration (quartier = neighborhood)
+const NQ = (D.qua || []).length;
+const quaTotKm = new Float64Array(NQ), quaKm = new Float64Array(NQ);
+if (NQ) EDGES.forEach(e=>{ if (e.q>=0 && e.q<NQ) quaTotKm[e.q]+=e.k; });
+
+const SAVE_KEY = "paris-streets-progress";
+const DEBUG_HIDE_KEY = "paris-debug-hidden";
+const debugHidden = new Set();
+let daily = false;                               // daily-mode flag (no persistence)
+// signature of the current dataset: changes whenever edges are added/removed/renamed/reordered —
+// exactly when saved edge indices stop being valid. Lets us detect (and heal) saves after a rebuild.
+const DATA_VERSION = (()=>{ let h=EDGES.length; for(const e of EDGES) for(let i=0;i<e.n.length;i++) h=(h*31+e.n.charCodeAt(i))|0; return h; })();
+const edgePoint = ei => { const p=EDGES[ei].p[0]; return p[(p.length/2)|0]; };   // representative point
+// ---- area granularities for the progress panel: arrondissement / quartier / rive ----------------
+// Rive is derived: every arrondissement sits entirely on one bank except the two islands, which we
+// detect geometrically (rings lifted from the IGN Seine water surface). Quartier is optional data
+// (each edge's `q` index + D.qua labels), baked by build_areas.py — its tab appears only when present.
+const ISLANDS = [                                // Île de la Cité, Île Saint-Louis (buffered rings, [lat,lon])
+  [[48.8578,2.33903],[48.85518,2.35096],[48.85148,2.35294],[48.85469,2.34309]],
+  [[48.85315,2.3528],[48.85407,2.35323],[48.8518,2.35992],[48.84932,2.36064],[48.85133,2.35385]],
+];
+const RIVE_GAUCHE = new Set([5,6,7,13,14,15]);   // left-bank arrondissement numbers; all others right bank
+function pointInRing(lat, lon, ring){            // ray-casting point-in-polygon
+  let inside = false;
+  for (let i=0,j=ring.length-1;i<ring.length;j=i++){
+    const yi=ring[i][0], xi=ring[i][1], yj=ring[j][0], xj=ring[j][1];
+    if (((yi>lat)!==(yj>lat)) && (lon < (xj-xi)*(lat-yi)/(yj-yi)+xi)) inside = !inside;
+  }
+  return inside;
+}
+function riveOf(ei){                              // 0 = right bank, 1 = left bank, 2 = islands, -1 = unassigned
+  const a = EDGES[ei].a; if (a<0 || a>=ARR.length) return -1;
+  const p = edgePoint(ei);
+  for (const r of ISLANDS) if (pointInRing(p[0], p[1], r)) return 2;
+  return RIVE_GAUCHE.has(parseInt(ARR[a],10)) ? 1 : 0;
+}
+// per-bank revealed km, for the biggest completion celebration (a whole rive is the largest area)
+const rivTotKm = new Float64Array(3), rivKm = new Float64Array(3);
+EDGES.forEach((e,i)=>{ const r=riveOf(i); if (r>=0) rivTotKm[r]+=e.k; });
+const hasQuartiers = () => Array.isArray(D.qua) && D.qua.length > 0 && EDGES[0] && EDGES[0].q !== undefined;
+let granIdx = 0;                                  // selected granularity (index into granList())
+function granList(){                              // built fresh so labels track the language; order: arr, quartier, rive
+  const g = [{ key:"arr", tab:t("gArr"), labels: ARR, group: ei => { const a=EDGES[ei].a; return (a>=0&&a<ARR.length)?a:-1; } }];
+  if (hasQuartiers()) g.push({ key:"qua", tab:t("gQua"), labels: D.qua, group: ei => { const q=EDGES[ei].q; return (q>=0&&q<D.qua.length)?q:-1; } });
+  g.push({ key:"riv", tab:t("gRive"), labels: [t("riveDroite"), t("riveGauche"), t("iles")], group: riveOf });
+  return g;
+}
+const granTotCache = {};                          // per-granularity total km per group (denominators), computed once
+function granTotals(gran){
+  if (granTotCache[gran.key]) return granTotCache[gran.key];
+  const tot = new Float64Array(gran.labels.length);
+  for (let ei=0; ei<EDGES.length; ei++){ const gi=gran.group(ei); if (gi>=0 && gi<tot.length) tot[gi]+=EDGES[ei].k; }
+  return granTotCache[gran.key] = tot;
+}
+// hovering a progress row outlines its region: the convex hull of that group's streets (cached per
+// group). A hull blob shows WHERE the area is without exposing individual unrevealed streets.
+let hoverArea = null;                             // {key, gi} of the hovered row, or null
+const hullCache = {};
+function convexHull(pts){                          // monotone chain; pts and result are [lat,lon]
+  if (pts.length < 3) return pts.slice();
+  const P = pts.map(p=>({x:p[1], y:p[0], p})).sort((a,b)=> a.x-b.x || a.y-b.y);
+  const cross = (o,a,b)=> (a.x-o.x)*(b.y-o.y)-(a.y-o.y)*(b.x-o.x), h=[];
+  for (const q of P){ while (h.length>=2 && cross(h[h.length-2],h[h.length-1],q)<=0) h.pop(); h.push(q); }
+  const lower = h.length+1;
+  for (let i=P.length-2;i>=0;i--){ const q=P[i]; while (h.length>=lower && cross(h[h.length-2],h[h.length-1],q)<=0) h.pop(); h.push(q); }
+  h.pop(); return h.map(o=>o.p);
+}
+function areaHull(key, gi){
+  const ck = key+":"+gi; if (hullCache[ck]) return hullCache[ck];
+  const gran = granList().find(g=>g.key===key); if (!gran) return hullCache[ck]=[];
+  const pts=[]; for (let ei=0; ei<EDGES.length; ei++) if (gran.group(ei)===gi){ const p=edgePoint(ei); pts.push([p[0],p[1]]); }
+  return hullCache[ck] = convexHull(pts);
+}
+function areaPolys(key, gi){                        // exact baked boundary (array of [lat,lon] rings); hull if absent
+  const src = key==="arr" ? D.arrPoly : key==="qua" ? D.quaPoly : key==="riv" ? D.rivPoly : null;
+  const p = src && src[gi];
+  if (p && p.length) return p;
+  const hull = areaHull(key, gi); return hull.length>=3 ? [hull] : [];
+}
+const edgesByName = new Map();                   // normalized name (core, prefix kept) -> edge indices
+EDGES.forEach((e,i)=>{ const k=core(e.n,false); const a=edgesByName.get(k); if(a) a.push(i); else edgesByName.set(k,[i]); });
+// Same-name merge: sections whose normalized name matches (so "…République"/"…Republique" unify) AND within 250m are one street, revealed
+// together (a street split by a gap). Farther same-name streets stay separate — e.g. the two
+// unrelated "Rue Michel-Ange" sit 3km apart. nameGroup[ei] = every edge merged with ei (incl. itself).
+const nameGroup = new Array(EDGES.length).fill(null);
+(()=>{
+  const M = 111320;                              // metres per degree of latitude
+  const near = (A,B) => {                         // do vertex sets A and B come within 250m of each other?
+    for (const [la1,lo1] of A) for (const [la2,lo2] of B){
+      const dy=(la1-la2)*M, dx=(lo1-lo2)*M*Math.cos((la1+la2)/2*Math.PI/180);
+      if (dx*dx+dy*dy < 6.25e4) return true;      // (250m)² threshold
+    }
+    return false;
+  };
+  for (const ids of edgesByName.values()){
+    if (ids.length < 2) continue;
+    const P = new Map(ids.map(i=>[i, EDGES[i].p.flat()]));   // all vertices per edge (p is a MultiLineString)
+    const seen = new Set();                        // flood-fill the <250m adjacency into components
+    for (const s of ids){
+      if (seen.has(s)) continue;
+      const comp=[s], stack=[s]; seen.add(s);
+      while (stack.length){ const u=stack.pop();
+        for (const v of ids) if (!seen.has(v) && near(P.get(u),P.get(v))){ seen.add(v); comp.push(v); stack.push(v); } }
+      if (comp.length > 1) for (const e of comp) nameGroup[e]=comp;
+    }
+  }
+})();
+// re-resolve a saved [name, lat, lon] to the current best-matching edge (nearest same-named segment)
+function resolveStreet(name, lat, lon){
+  const c = edgesByName.get(core(name, false)); if (!c) return -1;
+  if (c.length===1) return c[0];
+  let best=-1, bd=Infinity;
+  for (const ei of c){ const p=edgePoint(ei), d=(p[0]-lat)**2+(p[1]-lon)**2; if(d<bd){bd=d;best=ei;} }
+  return best;
+}
+function persistDebugHidden(){
+  if (daily) return;
+  const s = [...debugHidden].map(ei=>{ const p=edgePoint(ei); return [EDGES[ei].n,p[0],p[1]]; });
+  try { localStorage.setItem(DEBUG_HIDE_KEY, JSON.stringify({v:DATA_VERSION,s})); } catch(e){}
+}
+function setDebugHidden(ei, hidden){
+  for (const k of nameGroup[ei] || [ei]){
+    if (hidden) debugHidden.add(k); else debugHidden.delete(k);
+  }
+  persistDebugHidden();
+}
+function loadDebugHidden(){
+  try {
+    const x=JSON.parse(localStorage.getItem(DEBUG_HIDE_KEY) || "null");
+    for (const [nm,la,lo] of (x && x.s) || []){
+      const ei=resolveStreet(nm,la,lo); if(ei>=0) for(const k of nameGroup[ei] || [ei]) debugHidden.add(k);
+    }
+  } catch(e){}
+}
+loadDebugHidden();
+function save(){
+  if (daily) return;
+  // store street IDENTITY (name + representative point) + finder colour, not raw indices, so a future
+  // rebuild heals and colours survive a reconnect before the room history has replayed
+  const s = revList.map(ei => { const p=edgePoint(ei); return [EDGES[ei].n, p[0], p[1], edgeColor[ei]]; });
+  try { localStorage.setItem(SAVE_KEY, JSON.stringify({ v: DATA_VERSION, s })); } catch(e){}
+}
+function loadSave(){ try { return JSON.parse(localStorage.getItem(SAVE_KEY)); } catch(e){ return null; } }
+function saveHasProgress(x){ return Array.isArray(x) ? x.length>0 : !!(x && x.s && x.s.length); }
+// replay a save, healing across data versions. Returns the number of streets restored.
+function restoreSave(x){
+  if (Array.isArray(x)){                          // legacy bare-index array: no identity, can't heal
+    let n=0; for (const ei of x) if (ei>=0 && ei<EDGES.length && reveal(ei, true)) n++;
+    return n;
+  }
+  // set colour even when reveal() returns false: a merged same-name section may already be revealed
+  // (pulled in by an earlier entry's group-reveal) but still needs its own stored colour applied
+  let n=0; for (const [nm,la,lo,col] of x.s){ const ei=resolveStreet(nm,la,lo); if (ei<0) continue; if (reveal(ei,true)) n++; if (col) edgeColor[ei]=col; }
+  if (x.v !== DATA_VERSION){
+    console.warn(`Paris save healed across data change: restored ${n}/${x.s.length} streets`);
+    save();                                        // migrate to current version so next load is exact
+  }
+  return n;
+}
+
+// ---- day-streak: consecutive calendar days the game was opened -------------
+let dayStreak = 1;
+function updateDayStreak(){
+  try {
+    const dayKey = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+    const today = new Date(); today.setHours(0,0,0,0);
+    const yesterday = new Date(today); yesterday.setDate(yesterday.getDate()-1);
+    const todayKey = dayKey(today), yesterdayKey = dayKey(yesterday);
+    const s = JSON.parse(localStorage.getItem("paris-daystreak") || "null");
+    const lastKey = s && typeof s.last === "number" ? dayKey(new Date(s.last)) : s && s.last;
+    if (s && lastKey === todayKey){ dayStreak = s.n; return; }  // already counted today
+    if (s && lastKey === yesterdayKey) dayStreak = s.n + 1;     // played yesterday -> extend
+    else dayStreak = 1;                                        // missed a day (or first ever) -> reset
+    localStorage.setItem("paris-daystreak", JSON.stringify({ last: todayKey, n: dayStreak }));
+  } catch(e){ dayStreak = 1; }
+}
+
+// ---- sound: WebAudio blips, pitch/volume scaled to what was revealed --------
+let AC = null;
+function sound(km, area, big){
+  try {
+    AC = AC || new (window.AudioContext||window.webkitAudioContext)();
+    const now = AC.currentTime;
+    // longer street -> lower, fuller note; block fill -> a bright chord
+    const base = 300 + 340/Math.max(0.06, km+0.3);
+    // combo cadence: a hot streak nudges the pitch up a semitone per step (caps at an octave)
+    const combo = Math.pow(2, Math.min(12, Math.max(0, streak-1))/12);
+    const notes = big ? [base, base*1.26, base*1.5] : [Math.min(1400, base*combo)];
+    const vol = Math.min(0.32, 0.09 + km*0.06 + (area/60000)*0.12) * (big?1.3:1);
+    notes.forEach((f,i)=>{
+      const o = AC.createOscillator(), g = AC.createGain();
+      o.type = big ? "triangle" : "sine"; o.frequency.value = f;
+      const st = now + i*0.05;
+      g.gain.setValueAtTime(0, st);
+      g.gain.linearRampToValueAtTime(vol, st+0.012);
+      g.gain.exponentialRampToValueAtTime(0.0008, st + (big?0.5:0.22));
+      o.connect(g).connect(AC.destination); o.start(st); o.stop(st + (big?0.55:0.26));
+    });
+  } catch(e){}
+}
+
+function checkFaces(ei, replay){                  // reveal any block whose bounding streets are now all revealed
+  let filled = 0;
+  for (const fi of edgeFaces[ei]){
+    if (revFace[fi]) continue;
+    if (FACES[fi].e.every(e => revEdge[e])){
+      revFace[fi] = 1; faceList.push(fi); filled++;
+      const m = FACES[fi].m||0; revArea += m;
+      const k=(FACES[fi].a>=0&&FACES[fi].a<NB)?FACES[fi].a:NB; arrArea[k]+=m;
+      if (!replay) anim.push({type:"face", fi, t:0});
+    }
+  }
+  return filled;
+}
+function reveal(ei, replay){
+  if (debugHidden.has(ei)){
+    if (replay || applyingRemote) return false;
+    setDebugHidden(ei, false);                     // an explicit local reveal overrides a debug hide
+  }
+  if (revEdge[ei]) return false;
+  revEdge[ei] = 1; revList.push(ei); revEdgeCount++; revKm += EDGES[ei].k;
+  const k = ai(EDGES[ei]); arrKm[k]+=EDGES[ei].k; arrCntN[k]++;
+  const eq = EDGES[ei].q; if (eq>=0 && eq<quaKm.length) quaKm[eq]+=EDGES[ei].k;
+  const er = riveOf(ei); if (er>=0) rivKm[er]+=EDGES[ei].k;
+  EDGES[ei].i.forEach(ni => revNode[ni] = 1);
+  // update frontier: this edge's endpoints may now be revealed; any node that just
+  // lost its last unrevealed edge drops out. Only touch nodes adjacent to this edge.
+  for (const ni of EDGES[ei].i){
+    let open = false;
+    for (const e2 of nodeEdges[ni]) if (!revEdge[e2]){ open = true; break; }
+    if (open) frontier.add(ni); else frontier.delete(ni);
+  }
+  const filled = checkFaces(ei, replay);
+  fogDirty = true;                                 // geometry changed -> rebuild cached fog
+  // multiplayer: broadcast our own live discoveries; remote reveals are tinted by their finder
+  if (Sync.code && !daily){
+    if (applyingRemote){ edgeColor[ei] = remoteColor; }
+    else if (!replay){ const p = edgePoint(ei); Sync.pushOne(EDGES[ei].n, p[0], p[1]); }
+  }
+  if (!replay){
+    flashEdge = ei; flashT = 1; save();
+    anim.push({type:"edge", ei, t:0});           // draw-on animation
+    anim.push({type:"hl", ei, t:0});             // lingering gold highlight so a new find stands out for a bit
+    sound(EDGES[ei].k, filled ? 40000 : 0, filled>0);
+    if (!animRunning) { animRunning = true; requestAnimationFrame(animLoop); }
+  }
+  if (nameGroup[ei]) for (const k of nameGroup[ei]) reveal(k, replay);   // merged same-name sections are one street
+  return true;
+}
+
+// ---- map + overlay --------------------------------------------------------
+let map, W, H, DPR, follow = true, selNode = -1, debug = false, hoverFace = -1, dragging = false;
+let hoverEdge = -1, hoverXY = null;              // revealed street under cursor + cursor pos, for name tooltip
+let hoverPlaque = -1;                            // commemorative plaque under cursor
+let hoverSucette = -1;                           // Histoire-de-Paris panel under cursor
+const cv = document.getElementById("fog"), ctx = cv.getContext("2d");
+const fogLayer = document.createElement("canvas"), fctx = fogLayer.getContext("2d");  // cached fog+streets
+const edgeCv = document.createElement("canvas"), ectx = edgeCv.getContext("2d");      // filtered reveal shape (baked once/rebuild)
+let fogDirty = true;                             // rebuild the cached fog layer on next draw
+const MOBILE = matchMedia("(pointer:coarse)").matches || innerWidth < 620;   // phone/tablet: lighter rendering
+const fdisp = document.getElementById("fdisp"), fblur = document.getElementById("fblur");
+const fturb = document.getElementById("fturb");
+// fog boundary tunables (debug sliders). freq/octaves/seed/type = the feTurbulence "Perlin" noise;
+// scale = displacement amount; blur = final softening.
+const edgeCfg = { freq: 0.015, octaves: 3, seed: 11, scale: 10.0, blur: 0.5, turb: 0 };
+function proj(lat, lon){ return map.latLngToContainerPoint([lat, lon]); }
+
+// --- fast projection: precompute each point's world-pixel at a reference zoom once
+// (the costly Mercator math), then per frame apply a cheap affine (scale+translate).
+// Also precompute world bounding boxes so we can cull off-screen geometry. -----------
+const REFZ = 16;
+let PX = null;                                    // {e:[Float64Array...][], eb:[minx,miny,maxx,maxy], n:Float64Array, f:[...], fb:[...]}
+let S = 1, Tx = 0, Ty = 0;                        // current-frame affine (world px -> screen px)
+let visMinX, visMinY, visMaxX, visMaxY;           // current-frame visible world bbox (with margin)
+
+function precompute(){
+  const eb = [], fb = [];
+  const e = EDGES.map((ed, ei)=>{
+    let mnx=1e18,mny=1e18,mxx=-1e18,mxy=-1e18;
+    const paths = ed.p.map(path=>{
+      const a = new Float64Array(path.length*2);
+      for (let k=0;k<path.length;k++){
+        const q = map.project([path[k][0], path[k][1]], REFZ);
+        a[2*k]=q.x; a[2*k+1]=q.y;
+        if(q.x<mnx)mnx=q.x; if(q.x>mxx)mxx=q.x; if(q.y<mny)mny=q.y; if(q.y>mxy)mxy=q.y;
+      }
+      return a;
+    });
+    eb[ei]=[mnx,mny,mxx,mxy]; return paths;
+  });
+  const n = new Float64Array(NODES.length*2);
+  for (let i=0;i<NODES.length;i++){ const q=map.project([NODES[i][0],NODES[i][1]], REFZ); n[2*i]=q.x; n[2*i+1]=q.y; }
+  const f = FACES.map((fc, fi)=>{
+    let mnx=1e18,mny=1e18,mxx=-1e18,mxy=-1e18;
+    const a = new Float64Array(fc.p.length*2);
+    for (let k=0;k<fc.p.length;k++){
+      const q = map.project([fc.p[k][0], fc.p[k][1]], REFZ);
+      a[2*k]=q.x; a[2*k+1]=q.y;
+      if(q.x<mnx)mnx=q.x; if(q.x>mxx)mxx=q.x; if(q.y<mny)mny=q.y; if(q.y>mxy)mxy=q.y;
+    }
+    fb[fi]=[mnx,mny,mxx,mxy]; return a;
+  });
+  const pl = new Float64Array(PLAQUES.length*2);
+  for (let i=0;i<PLAQUES.length;i++){ const q=map.project([PLAQUES[i].la, PLAQUES[i].lo], REFZ); pl[2*i]=q.x; pl[2*i+1]=q.y; }
+  const su = new Float64Array(SUCETTES.length*2);
+  for (let i=0;i<SUCETTES.length;i++){ const q=map.project([SUCETTES[i].la, SUCETTES[i].lo], REFZ); su[2*i]=q.x; su[2*i+1]=q.y; }
+  PX = { e, eb, n, f, fb, pl, su };
+}
+function updateXform(){                            // recompute affine + visible bbox for the current view (2 Leaflet calls)
+  const z = map.getZoom();
+  S = Math.pow(2, z - REFZ);
+  const c = map.getCenter(), cll = [c.lat, c.lng];
+  const cp = map.latLngToContainerPoint(cll), cw = map.project(cll, REFZ);
+  Tx = cp.x - cw.x*S; Ty = cp.y - cw.y*S;
+  const m = 60;                                    // margin so edge geometry near borders still draws
+  visMinX = (-m - Tx)/S; visMaxX = (W+m - Tx)/S;
+  visMinY = (-m - Ty)/S; visMaxY = (H+m - Ty)/S;
+}
+const onScreen = bb => !(bb[2]<visMinX || bb[0]>visMaxX || bb[3]<visMinY || bb[1]>visMaxY);
+
+// nearest REVEALED street within a few px of a screen point (for hover name)
+function edgeAt(px, py){
+  updateXform();
+  const r = 8, wr = r/S;                           // grab radius in px, and in world units
+  let best = -1, bd = r*r;
+  const list = debug ? EDGES.keys() : revList;      // debug: hit-test ALL streets, else only revealed
+  for (const ei of list){
+    const bb = PX.eb[ei];                           // cull by world bbox (expanded by grab radius)
+    if (px<bb[0]*S+Tx-r || px>bb[2]*S+Tx+r || py<bb[1]*S+Ty-r || py>bb[3]*S+Ty+r) continue;
+    for (const a of PX.e[ei]){
+      let ax=a[0]*S+Tx, ay=a[1]*S+Ty;
+      for (let k=1;k<a.length/2;k++){
+        const bx=a[2*k]*S+Tx, by=a[2*k+1]*S+Ty;
+        const d = distToSeg(px, py, ax, ay, bx, by);
+        if (d < bd){ bd = d; best = ei; }
+        ax=bx; ay=by;
+      }
+    }
+  }
+  return best;
+}
+function distToSeg(px, py, ax, ay, bx, by){       // squared distance from point to segment
+  const dx=bx-ax, dy=by-ay, L2=dx*dx+dy*dy;
+  let t = L2 ? ((px-ax)*dx+(py-ay)*dy)/L2 : 0;
+  t = Math.max(0, Math.min(1, t));
+  const cx=ax+t*dx, cy=ay+t*dy;
+  return (px-cx)**2 + (py-cy)**2;
+}
+
+// smallest face polygon containing a screen point (ray casting in screen space)
+function faceAt(px, py){
+  updateXform();
+  let best = -1, bestArea = 1e18;
+  for (let fi=0; fi<FACES.length; fi++){
+    const bb = PX.fb[fi];
+    if (px<bb[0]*S+Tx || px>bb[2]*S+Tx || py<bb[1]*S+Ty || py>bb[3]*S+Ty) continue;  // bbox cull
+    const a = PX.f[fi]; const n = a.length/2; let inside = false;
+    for (let i=0,j=n-1; i<n; j=i++){
+      const yi=a[2*i+1]*S+Ty, yj=a[2*j+1]*S+Ty;
+      if ((yi>py)!==(yj>py)){
+        const xi=a[2*i]*S+Tx, xj=a[2*j]*S+Tx;
+        if (px < (xj-xi)*(py-yi)/(yj-yi)+xi) inside=!inside;
+      }
+    }
+    if (inside){ const ar=(bb[2]-bb[0])*(bb[3]-bb[1]); if(ar<bestArea){ bestArea=ar; best=fi; } }
+  }
+  return best;
+}
+
+// ---- simple fog: one static feTurbulence mist over a warm gradient, baked once per size.
+// The whole fog layer is cached and only rebuilt when the view/geometry changes (fogDirty) --
+// no animation loop, no layers. Cheap on phones.
+let fogSeed = 7, fogTex = null;
+// fog TEXTURE tunables (debug sliders): the mist's own Perlin noise + tint + opacity
+const texCfg = { freq: 0.012, octaves: 4, tint: 0.96, opacity: 0.85, turb: 0 };
+function makeCloud(){                               // bake the mist texture (viewport-sized, screen-fixed)
+  if (!map) return;
+  const w = Math.ceil(W), h = Math.ceil(H), C = texCfg;
+  const tt = C.tint.toFixed(3), tb = Math.min(1, C.tint+0.02).toFixed(3);
+  const svg =
+    "<svg xmlns='http://www.w3.org/2000/svg' width='"+w+"' height='"+h+"'>"+
+      "<filter id='c' x='0' y='0' width='100%' height='100%'>"+
+        "<feTurbulence type='"+(C.turb?"turbulence":"fractalNoise")+"' baseFrequency='"+C.freq+
+          "' numOctaves='"+C.octaves+"' seed='"+fogSeed+"'/>"+
+        "<feColorMatrix type='matrix' values='0 0 0 0 "+tt+"  0 0 0 0 "+tt+"  0 0 0 0 "+tb+"  0 0 0 "+C.opacity.toFixed(3)+" 0'/>"+
+      "</filter>"+
+      "<rect width='100%' height='100%' filter='url(#c)'/>"+
+    "</svg>";
+  const img = new Image();
+  img.onload = ()=>{
+    const c = document.createElement("canvas"); c.width = w; c.height = h;
+    c.getContext("2d").drawImage(img, 0, 0);
+    fogTex = c; fogDirty = true; draw();
+  };
+  img.src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg);
+}
+
+function resize(){
+  DPR = Math.min(window.devicePixelRatio||1, MOBILE ? 1.5 : 2);   // cap lower on phones (fog filters are pixel-bound)
+  W = map.getSize().x; H = map.getSize().y;
+  for (const c of [cv, fogLayer, edgeCv]){ c.width = W*DPR; c.height = H*DPR; }
+  cv.style.width = W+"px"; cv.style.height = H+"px";
+  for (const cc of [ctx, fctx, ectx]) cc.setTransform(DPR,0,0,DPR,0,0);
+  fogDirty = true;
+  makeCloud();
+}
+
+function revealedBounds(){
+  let a=90,b=-90,c=180,d=-180, any=false;
+  for (const ei of revList)
+    for (const path of EDGES[ei].p) for (const [la,lo] of path){
+      any=true; if(la<a)a=la; if(la>b)b=la; if(lo<c)c=lo; if(lo>d)d=lo;
+    }
+  return any ? L.latLngBounds([a,c],[b,d]) : null;
+}
+// smooth camera tween: interpolate center+zoom over `ms`, instant setView per frame
+// (zoomAnimation is off, so each setView is instant and the canvas stays glued -> smooth).
+let camRAF = 0, camStartT = 0;
+function tweenTo(targetCenter, targetZoom, ms){
+  if (dragging) return;
+  cancelAnimationFrame(camRAF);
+  const c0 = map.getCenter(), z0 = map.getZoom();
+  const c1 = targetCenter, z1 = Math.max(map.getMinZoom(), Math.min(map.getMaxZoom(), targetZoom));
+  if (Math.abs(z1-z0) < 0.01 && map.distance(c0,c1) < 5){ return; }  // nothing to do
+  const dur = ms || 550; let start = null;
+  dragging = true;                                                    // fast fog while flying
+  const ease = t => 1-(1-t)*(1-t);
+  function frame(ts){
+    if (start===null) start = ts;
+    const t = Math.min(1, (ts-start)/dur), e = ease(t);
+    const lat = c0.lat + (c1.lat-c0.lat)*e, lng = c0.lng + (c1.lng-c0.lng)*e;
+    map.setView([lat,lng], z0 + (z1-z0)*e, { animate:false });
+    if (t<1) camRAF = requestAnimationFrame(frame);
+    else { dragging = false; fogDirty = true; draw(); }
+  }
+  camRAF = requestAnimationFrame(frame);
+}
+// Leaflet's fractional-zoom helper: what zoom fits these bounds in the current viewport
+function zoomForBounds(bb, padPx, maxZ){
+  const z = map.getBoundsZoom(bb, false, L.point(padPx,padPx));
+  return Math.min(z, maxZ==null?19:maxZ);
+}
+function fitRevealed(){
+  const bb = revealedBounds(); if(!bb) return;
+  tweenTo(bb.getCenter(), zoomForBounds(bb, 80, 16), 650);
+}
+function edgeBounds(ei){
+  let a=90,b=-90,c=180,d=-180;
+  for (const path of EDGES[ei].p) for (const [la,lo] of path){
+    if(la<a)a=la; if(la>b)b=la; if(lo<c)c=lo; if(lo>d)d=lo;
+  }
+  return L.latLngBounds([a,c],[b,d]);
+}
+function growViewToEdge(ei){                       // keep the current view, expand it just enough to include the new street
+  const nb = edgeBounds(ei);
+  if (map.getBounds().contains(nb)) return;        // already visible -> leave the view untouched
+  const merged = map.getBounds().extend(nb);
+  tweenTo(merged.getCenter(), zoomForBounds(merged, 80, map.getZoom()), 500);
+}
+function highlightEdge(ei){ anim.push({type:"hl", ei, t:0}); if(!animRunning){ animRunning=true; requestAnimationFrame(animLoop); } }
+function goToEdge(ei){                             // from the recent-finds list: fly to a street and highlight it
+  follow = false;
+  const bb = edgeBounds(ei);
+  tweenTo(bb.getCenter(), Math.min(zoomForBounds(bb, 140, 17), 17), 650);
+  highlightEdge(ei);
+  if (MOBILE) setSide(false);                     // on phones, close the drawer so the map is visible
+}
+
+// ---- render fog + reveal overlay -----------------------------------------
+function strokePathsG(g, ei){                      // add this edge's polylines to context g's path
+  for (const a of PX.e[ei]){
+    g.moveTo(a[0]*S+Tx, a[1]*S+Ty);
+    for (let k=1;k<a.length/2;k++) g.lineTo(a[2*k]*S+Tx, a[2*k+1]*S+Ty);
+  }
+}
+function tracePolyG(g, a){                          // add a face polygon to context g's path
+  g.moveTo(a[0]*S+Tx, a[1]*S+Ty);
+  for (let k=1;k<a.length/2;k++) g.lineTo(a[2*k]*S+Tx, a[2*k+1]*S+Ty);
+  g.closePath();
+}
+function strokePaths(ei){ strokePathsG(ctx, ei); } // overlays draw on the main context
+function tracePoly(a){ tracePolyG(ctx, a); }
+// Build the cached fog layer: warm gradient + static mist, holes punched along revealed
+// streets/blocks, gilded edge + ink streets on top. Rebuilt only on reveal/view change (fogDirty).
+function renderFog(){
+  const z = map.getZoom();
+  const mPerPx = 156543.03392 * Math.cos(map.getCenter().lat*Math.PI/180) / Math.pow(2, z);
+  const brush = 18 / mPerPx;
+  const g = fctx;
+  g.setTransform(DPR,0,0,DPR,0,0); g.globalCompositeOperation = "source-over"; g.clearRect(0,0,W,H);
+  g.lineCap = "round"; g.lineJoin = "round";
+
+  // 1. warm sky gradient + static mist
+  const grad = g.createLinearGradient(0, 0, 0, H);
+  grad.addColorStop(0, "#efe7d6"); grad.addColorStop(1, "#d7dce4");
+  g.fillStyle = grad; g.fillRect(0, 0, W, H);
+  if (fogTex) g.drawImage(fogTex, 0, 0, W, H);
+
+  // feathered edge: SVG turbulence on desktop (irregular mist); a plain blur while dragging
+  // or on mobile (much cheaper — filters are the main per-render cost on phones).
+  fturb.setAttribute("type", edgeCfg.turb ? "turbulence" : "fractalNoise");
+  fturb.setAttribute("baseFrequency", edgeCfg.freq);                     // Perlin frequency (lower = smoother)
+  fturb.setAttribute("numOctaves", edgeCfg.octaves);                     // Perlin detail
+  fturb.setAttribute("seed", edgeCfg.seed);                             // Perlin seed (pattern variation)
+  fdisp.setAttribute("scale", Math.max(14, brush*edgeCfg.scale).toFixed(0));  // irregularity (higher = wilder)
+  fblur.setAttribute("stdDeviation", (brush*edgeCfg.blur).toFixed(1));  // final softening
+  const edgeFilter = (dragging || MOBILE) ? `blur(${(brush*0.5).toFixed(1)}px)` : "url(#fogEdge)";
+
+  // bake the raw reveal shape into edgeCv (NO filter here) with a separate fill() per polygon —
+  // batching into one path uses nonzero winding, so overlapping faces could cancel and leave a
+  // hole. The feathering filter is applied once, later, when blitting edgeCv.
+  const e = ectx;
+  e.setTransform(DPR,0,0,DPR,0,0); e.globalCompositeOperation="source-over"; e.clearRect(0,0,W,H);
+  e.lineCap="round"; e.lineJoin="round"; e.filter = "none";
+  e.fillStyle = "rgba(214,168,74,1)"; e.strokeStyle = "rgba(214,168,74,1)"; e.lineWidth = brush;
+  for (const fi of faceList) if (onScreen(PX.fb[fi])){ e.beginPath(); tracePolyG(e, PX.f[fi]); e.fill(); }
+  e.beginPath();
+  for (const ei of revList) if (onScreen(PX.eb[ei])) strokePathsG(e, ei);
+  e.stroke();
+
+  // 2. gilded coastline: the baked shape, spread outward by a blur -> soft gold halo around the hole
+  g.save();
+  g.globalAlpha = 0.4;
+  g.filter = `blur(${(brush*(MOBILE?0.6:0.9)).toFixed(1)}px)`;
+  g.drawImage(edgeCv, 0, 0, W, H);
+  g.filter = "none"; g.globalAlpha = 1; g.restore();
+
+  // 3. punch the holes out of the fog — feather the whole shape in ONE filtered blit
+  g.save();
+  g.globalCompositeOperation = "destination-out";
+  g.filter = edgeFilter;
+  g.drawImage(edgeCv, 0, 0, W, H);
+  g.filter = "none"; g.restore();
+  g.globalCompositeOperation = "source-over";
+
+  // 4. faint warm tint on cleared blocks + revealed streets as ink
+  for (const fi of faceList){
+    if (!onScreen(PX.fb[fi])) continue;
+    g.beginPath(); tracePolyG(g, PX.f[fi]); g.fillStyle = "rgba(214,168,74,0.07)"; g.fill();
+  }
+  for (const ei of revList){
+    if (!onScreen(PX.eb[ei])) continue;
+    const w = brush * 0.22 * (0.8 + Math.min(1.1, EDGES[ei].k*0.6));   // ground-proportional ink width
+    g.strokeStyle = edgeColor[ei] || "rgba(40,54,74,0.72)";           // finder's colour in a room, else default ink
+    g.lineWidth = Math.max(0.8, w);
+    g.beginPath(); strokePathsG(g, ei); g.stroke();
+  }
+  fogDirty = false;
+}
+function markerScale(){                             // junction/plaque/sucette markers scale with zoom, like the ink.
+  const mpp = 156543.03392 * Math.cos(map.getCenter().lat*Math.PI/180) / Math.pow(2, map.getZoom());
+  return Math.min(3, (18/mpp)/6);                   // capped above only — no floor, so zooming out shrinks them with the map
+}
+function draw(){
+  if (!map || !PX) return;
+  const z = map.getZoom();
+  updateXform();
+  const mPerPx = 156543.03392 * Math.cos(map.getCenter().lat*Math.PI/180) / Math.pow(2, z);
+  const brush = 18 / mPerPx;                         // ground-invariant unit (18 m in screen px)
+  const ms = markerScale();                          // shared marker scale for this frame
+  if (fogDirty) renderFog();                        // rebuild cached fog only when needed
+  ctx.setTransform(1,0,0,1,0,0); ctx.clearRect(0,0,cv.width,cv.height);
+  ctx.drawImage(fogLayer, 0, 0);                   // blit the cached fog (cheap)
+  ctx.setTransform(DPR,0,0,DPR,0,0);
+  ctx.lineCap = "round"; ctx.lineJoin = "round";
+
+  // 4. reveal animations: streets draw-on in gold, blocks pop with a shimmer
+  for (const A of anim){
+    if (A.type === "edge"){
+      const e = A.ei; const g = 1 - (1-A.t)*(1-A.t);       // ease-out
+      ctx.strokeStyle = `rgba(255,201,92,${0.9*(1-A.t)+0.1})`;
+      ctx.lineWidth = brush*0.6*(1.4-0.4*A.t);          // ground-proportional draw-on width
+      ctx.save(); ctx.beginPath();
+      for (const a of PX.e[e]){                              // draw a growing fraction of each polyline
+        const npt = a.length/2, upto = Math.max(1, Math.floor(npt*g));
+        ctx.moveTo(a[0]*S+Tx, a[1]*S+Ty);
+        for (let k=1;k<=upto && k<npt;k++) ctx.lineTo(a[2*k]*S+Tx, a[2*k+1]*S+Ty);
+      }
+      ctx.stroke(); ctx.restore();
+    } else if (A.type === "face"){
+      const poly = PX.f[A.fi], bb = PX.fb[A.fi];
+      if (!onScreen(bb)) continue;
+      ctx.save();
+      ctx.beginPath(); tracePoly(poly);
+      ctx.fillStyle = `rgba(255,201,92,${0.5*(1-A.t)})`; ctx.fill();       // gold shimmer fading out
+      ctx.strokeStyle = `rgba(255,214,120,${0.9*(1-A.t)})`; ctx.lineWidth = 2+4*(1-A.t); ctx.stroke();
+      ctx.restore();
+    } else if (A.type === "locate"){
+      // one faint glow of a known-but-unreachable street, to help you locate it under the fog
+      if (!onScreen(PX.eb[A.ei])) continue;
+      const pulse = Math.sin(A.t*Math.PI)**2;                              // single pulse (up then down)
+      ctx.save();
+      ctx.filter = `blur(${(brush*4.4).toFixed(1)}px)`;                    // strong blur -> soft glow, not a line
+      ctx.strokeStyle = `rgba(120,170,255,${0.4*pulse})`;
+      ctx.lineWidth = brush*0.7;
+      ctx.beginPath(); strokePaths(A.ei); ctx.stroke();
+      ctx.restore();
+    } else if (A.type === "hl"){
+      // lingering highlight after a find (or when picked from the recent-finds list): a gold glow shimmering out
+      if (!onScreen(PX.eb[A.ei])) continue;
+      const fade = 1-A.t, pulse = 0.55 + 0.45*Math.sin(A.t*Math.PI*3);
+      ctx.save();
+      ctx.filter = `blur(${(brush*2.6).toFixed(1)}px)`;
+      ctx.strokeStyle = `rgba(255,201,92,${0.7*fade})`;
+      ctx.lineWidth = brush*1.1;
+      ctx.beginPath(); strokePaths(A.ei); ctx.stroke();
+      ctx.restore();
+      ctx.strokeStyle = `rgba(255,228,150,${0.85*fade*pulse})`;
+      ctx.lineWidth = brush*0.5;
+      ctx.beginPath(); strokePaths(A.ei); ctx.stroke();
+    }
+  }
+  // flash the newest reveal (kept for the persistent post-anim tint)
+  if (flashT>0 && flashEdge>=0){
+    ctx.strokeStyle = `rgba(234,67,53,${flashT*0.6})`; ctx.lineWidth = brush*0.55;
+    ctx.beginPath(); strokePaths(flashEdge); ctx.stroke();
+  }
+
+  // hovering a progress-panel row: outline that arrondissement / quartier / bank region
+  if (hoverArea){
+    const polys = areaPolys(hoverArea.key, hoverArea.gi);
+    if (polys.length){
+      ctx.save(); ctx.beginPath();
+      for (const ring of polys){
+        for (let i=0;i<ring.length;i++){ const q = proj(ring[i][0], ring[i][1]); i ? ctx.lineTo(q.x,q.y) : ctx.moveTo(q.x,q.y); }
+        ctx.closePath();
+      }
+      ctx.fillStyle = "rgba(26,115,232,0.14)"; ctx.fill();
+      ctx.setLineDash([7,5]); ctx.strokeStyle = "rgba(26,115,232,0.9)"; ctx.lineWidth = 2; ctx.stroke();
+      ctx.setLineDash([]); ctx.restore();
+    }
+  }
+
+  // 4b. debug: highlight the reveal-area under the cursor + outline its bounding streets
+  if (debug && hoverFace >= 0){
+    ctx.beginPath(); tracePoly(PX.f[hoverFace]);
+    ctx.fillStyle = "rgba(124,58,237,0.28)"; ctx.fill();
+    ctx.strokeStyle = "rgba(124,58,237,0.9)"; ctx.lineWidth = 2; ctx.stroke();
+    for (const ei of FACES[hoverFace].e){          // green = revealed, red = still needed
+      ctx.strokeStyle = revEdge[ei] ? "rgba(16,160,80,0.95)" : "rgba(230,40,60,0.95)";
+      ctx.lineWidth = 4; ctx.beginPath(); strokePaths(ei); ctx.stroke();
+    }
+  }
+
+  // 5. junctions: shown only while not fully revealed (a node with an unrevealed
+  //    edge). Once all its edges are revealed the node disappears. Click two to
+  //    connect them and reveal the street joining exactly those two.
+  const nr = 4 * ms;                             // junction marker, scaled with the map
+  for (const ni of frontier){
+    const x = PX.n[2*ni]*S+Tx, y = PX.n[2*ni+1]*S+Ty;
+    if (x<-10||x>W+10||y<-10||y>H+10) continue;
+    const sel = (ni===selNode);
+    ctx.strokeStyle = sel ? "rgba(26,115,232,1)" : "rgba(245,158,11,0.95)";
+    ctx.lineWidth = (sel ? 2.5 : 1.5) * ms; ctx.fillStyle = sel ? "rgba(26,115,232,0.25)" : "rgba(255,255,255,0.9)";
+    ctx.beginPath(); ctx.arc(x,y, sel ? nr*1.6 : nr, 0,7); ctx.fill(); ctx.stroke();
+  }
+
+
+  // 6. names of revealed streets at close zoom (reinforces learning)
+  if (z >= 16){
+    ctx.font = "600 12px ui-sans-serif,system-ui,sans-serif"; ctx.textAlign="center"; ctx.textBaseline="middle";
+    ctx.shadowColor="#fff"; ctx.shadowBlur=5; ctx.fillStyle="rgba(20,40,90,0.95)";
+    for (const ei of revList){
+      if (!onScreen(PX.eb[ei])) continue;
+      const a = PX.e[ei][0], mk = ((a.length/2)>>1);
+      const x = a[2*mk]*S+Tx, y = a[2*mk+1]*S+Ty;
+      if (x<0||x>W||y<0||y>H) continue;
+      ctx.fillText(EDGES[ei].n, x, y);
+    }
+    ctx.shadowBlur=0;
+  }
+
+  // 6c. commemorative plaques (opendata.paris.fr): small bronze dots, hover for the transcribed text
+  if (PX.pl && PLAQUES.length){
+    ctx.beginPath();
+    for (let i=0;i<PLAQUES.length;i++){
+      if (i===hoverPlaque || !revEdge[PLAQUES[i].ei]) continue;   // only once its street is revealed
+      const px=PX.pl[2*i], py=PX.pl[2*i+1];
+      if (px<visMinX||px>visMaxX||py<visMinY||py>visMaxY) continue;
+      const sx=px*S+Tx, sy=py*S+Ty, r=2.4*ms;
+      ctx.moveTo(sx+r, sy); ctx.arc(sx, sy, r, 0, 6.2832);
+    }
+    ctx.fillStyle="rgba(150,90,40,0.7)"; ctx.fill();
+    ctx.lineWidth=ms; ctx.strokeStyle="rgba(255,244,230,0.75)"; ctx.stroke();
+    if (hoverPlaque>=0){                             // draw the hovered dot larger, on top
+      const sx=PX.pl[2*hoverPlaque]*S+Tx, sy=PX.pl[2*hoverPlaque+1]*S+Ty;
+      ctx.beginPath(); ctx.arc(sx, sy, 5*ms, 0, 6.2832);
+      ctx.fillStyle="#e0a92e"; ctx.fill(); ctx.lineWidth=2*ms; ctx.strokeStyle="#fff"; ctx.stroke();
+    }
+  }
+
+  // 6c-bis. Histoire de Paris panels: a little pelle/"sucette Starck" silhouette (bottom tip at the spot),
+  //         more notable than the plaque dots; hover for the recovered panel text.
+  if (PX.su && SUCETTES.length){
+    const pelle = (sx, sy, sc, hov) => {           // draw the editor silhouette: right-half points then their mirror; bottom at (sx,sy)
+      const H=20*sc, U=5.6*sc, P=SUCETTE_SHAPE;
+      ctx.beginPath(); ctx.moveTo(sx+P[0][0]*U, sy-P[0][1]*H);
+      for (let i=1;i<P.length;i++) ctx.lineTo(sx+P[i][0]*U, sy-P[i][1]*H);          // up the right side to the apex
+      for (let i=P.length-2;i>=0;i--) ctx.lineTo(sx-P[i][0]*U, sy-P[i][1]*H);       // mirror back down the left
+      ctx.closePath();
+      ctx.fillStyle = hov ? "#3a322a" : "#25201b"; ctx.fill();
+      ctx.lineWidth = (hov?1.4:1)*sc; ctx.strokeStyle = hov ? "#ffd98a" : "rgba(232,214,178,0.9)"; ctx.stroke();
+      ctx.strokeStyle="#c0392b"; ctx.lineWidth=1.2*sc;   // red "Histoire de Paris" band
+      const wb=0.62*U*Math.max(...P.map(p=>p[0])), yb=sy-SUCETTE_BAND*H;
+      ctx.beginPath(); ctx.moveTo(sx-wb,yb); ctx.lineTo(sx+wb,yb); ctx.stroke();
+    };
+    const ssc = Math.min(ms, 1.5);                 // cap the sucette's max size at half the other markers' max
+    for (let i=0;i<SUCETTES.length;i++){
+      if (i===hoverSucette || !revEdge[SUCETTES[i].ei]) continue;   // only once its street is revealed
+      const px=PX.su[2*i], py=PX.su[2*i+1];
+      if (px<visMinX||px>visMaxX||py<visMinY||py>visMaxY) continue;
+      pelle(px*S+Tx, py*S+Ty, ssc, false);
+    }
+    if (hoverSucette>=0) pelle(PX.su[2*hoverSucette]*S+Tx, PX.su[2*hoverSucette+1]*S+Ty, ssc*1.4, true);
+  }
+
+  // 6d. daily route: pulse the goal street; when off-screen, a chevron at the border points to it
+  if (daily && !dailyEnded && dailyTarget>=0){
+    const tp = edgePoint(dailyTarget), q = proj(tp[0], tp[1]);
+    const pulse = 0.5 + 0.5*Math.sin((Date.now()%1200)/1200*6.2832);
+    if (q.x>=0 && q.x<=W && q.y>=0 && q.y<=H){
+      ctx.strokeStyle = `rgba(234,67,53,${0.45+0.4*pulse})`; ctx.lineWidth = brush*0.5;
+      ctx.beginPath(); strokePaths(dailyTarget); ctx.stroke();
+      ctx.beginPath(); ctx.arc(q.x, q.y, 9+5*pulse, 0, 6.2832); ctx.strokeStyle="#ea4335"; ctx.lineWidth=3; ctx.stroke();
+      ctx.beginPath(); ctx.arc(q.x, q.y, 4, 0, 6.2832); ctx.fillStyle="#ea4335"; ctx.fill();
+    } else {
+      const ang = Math.atan2(q.y-H/2, q.x-W/2), m=26;
+      const bx = Math.max(m, Math.min(W-m, q.x)), by = Math.max(m, Math.min(H-m, q.y));
+      ctx.save(); ctx.translate(bx, by); ctx.rotate(ang);
+      ctx.fillStyle="#ea4335"; ctx.beginPath(); ctx.moveTo(14,0); ctx.lineTo(-9,-9); ctx.lineTo(-9,9); ctx.closePath(); ctx.fill();
+      ctx.restore();
+    }
+  }
+
+  // 7. hovered street: highlight it and show its name in a tooltip by the cursor. Normally only
+  //    revealed streets are hoverable (red); in debug mode unrevealed ones show too, tinted purple.
+  if (hoverEdge >= 0 && hoverXY){
+    const spoiler = !revEdge[hoverEdge];           // unrevealed -> debug-only spoiler
+    ctx.strokeStyle = spoiler ? "rgba(167,139,250,0.95)" : "rgba(234,67,53,0.9)";
+    ctx.lineWidth = Math.max(2, brush*0.5);
+    ctx.beginPath(); strokePaths(hoverEdge); ctx.stroke();
+    const label = EDGES[hoverEdge].n;
+    ctx.font = "600 13px ui-sans-serif,system-ui,sans-serif";
+    const tw = ctx.measureText(label).width, pad = 7, bw = tw+pad*2, bh = 24;
+    let bx = hoverXY.x + 14, by = hoverXY.y - bh - 8;
+    if (bx+bw > W) bx = hoverXY.x - bw - 14;
+    if (by < 0) by = hoverXY.y + 14;
+    ctx.fillStyle = spoiler ? "rgba(59,32,92,0.92)" : "rgba(20,28,40,0.92)";
+    ctx.beginPath(); ctx.roundRect(bx, by, bw, bh, 6); ctx.fill();
+    ctx.fillStyle = "#fff"; ctx.textAlign="left"; ctx.textBaseline="middle";
+    ctx.fillText(label, bx+pad, by+bh/2);
+  }
+}
+
+// ---- stats ----------------------------------------------------------------
+function frontierCount(){                         // # of distinct unrevealed edges reachable from the frontier
+  const s=new Set();
+  for(const ni of frontier) for(const ei of nodeEdges[ni]) if(!revEdge[ei]) s.add(ei);
+  return s.size;
+}
+// displayed (tweened) stat values, for count-up animation
+const disp = { streets: 0, km: 0, area: 0 };
+let statsRAF = 0;
+function renderStats(){
+  if (daily && dailyTarget>=0){                    // daily route: show the goal + your running cost
+    document.getElementById("stats").innerHTML =
+      `<span>🎯 <b>${escHtml(EDGES[dailyTarget].n)}</b></span>`+
+      `<span><b>${revEdgeCount}</b> ${t("streets")}</span>`+
+      `<span><b>${revKm.toFixed(1)}</b> ${t("km")}</span>`+
+      (streak>=2?`<span class="strk" id="strk">🔥 <b>${streak}</b> ${t("streak")}</span>`:"");
+    return;
+  }
+  const pS=(100*disp.streets/EDGES.length).toFixed(1), pK=(100*disp.km/TOTAL_KM).toFixed(1);
+  const pA=(100*disp.area/TOTAL_AREA).toFixed(1);
+  const st = streak>=2 ? `<span class="strk" id="strk">🔥 <b>${streak}</b> ${t("streak")}</span>` : "";
+  const ds = (dayStreak>=2 && !daily) ? `<span class="strk">📅 <b>${dayStreak}</b> ${t("dayStreak")}</span>` : "";
+  document.getElementById("stats").innerHTML =
+    `<span><b>${Math.round(disp.streets)}</b> / ${EDGES.length} ${t("streets")} (<b>${pS}%</b>)</span>`+
+    `<span><b>${disp.km.toFixed(1)}</b> / ${TOTAL_KM.toFixed(0)} ${t("km")} (<b>${pK}%</b>)</span>`+
+    `<span><b>${(disp.area/1e6).toFixed(2)}</b> / ${(TOTAL_AREA/1e6).toFixed(1)} ${t("area")} (<b>${pA}%</b>)</span>`+
+    `<span>${t("reachable")}: <b>${frontierCount()}</b></span>`+ st + ds;
+}
+function tweenStats(){
+  let more = false;
+  for (const key of ["streets","km","area"]){
+    const target = key==="streets"?revEdgeCount : key==="km"?revKm : revArea;
+    const d = target - disp[key];
+    if (Math.abs(d) > (key==="area"?1:0.02)){ disp[key] += d*0.28; more = true; }
+    else disp[key] = target;
+  }
+  renderStats();
+  if (more) statsRAF = requestAnimationFrame(tweenStats); else statsRAF = 0;
+}
+function updateStats(instant){
+  if (instant){ disp.streets=revEdgeCount; disp.km=revKm; disp.area=revArea; renderStats(); }
+  else if (!statsRAF) statsRAF = requestAnimationFrame(tweenStats);
+  const side = document.getElementById("side"), btn = document.getElementById("arrBtn");
+  if (daily || !ARR.length){                     // daily / no data: hide the whole sidebar + its chip
+    if (side){ side.classList.remove("open"); side.style.display="none"; }
+    if (btn) btn.style.display="none";
+  } else {
+    if (side) side.style.display="";
+    if (btn) btn.style.display="";
+    renderAreaStats(); renderHistory();
+  }
+  if (debug) updateDebugPanel();               // keep the hovered-area checklist fresh after a reveal
+}
+const escHtml = s => s.replace(/[&<>]/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
+// recent finds, newest first, one row per distinct street name; click flies to it and highlights it
+function renderHistory(){
+  const box = document.getElementById("hist"); if (!box) return;
+  const seen = new Set(), rows = [];
+  for (let i=revList.length-1; i>=0 && rows.length<40; i--){
+    const ei = revList[i]; if (seen.has(EDGES[ei].n)) continue; seen.add(EDGES[ei].n); rows.push(ei);
+  }
+  box.innerHTML = `<div class="ah">${t("recent")}</div>` + (rows.length
+    ? rows.map(ei=>{
+        const lab = ARR[ai(EDGES[ei])] || "", nm = escHtml(EDGES[ei].n);
+        return `<button class="hrow" data-ei="${ei}" title="${nm}">`+
+               `<i class="hdot" style="background:${edgeColor[ei]||"#9fb2c9"}"></i>`+
+               `<span class="hn">${nm}</span>`+
+               (lab?`<span class="hnum">${lab}${/^\d+$/.test(lab)?"e":""}</span>`:"")+
+               `</button>`;
+      }).join("")
+    : `<div class="hempty">${t("recentEmpty")}</div>`);
+}
+// area-progress panel: a granularity toggle (arr / quartier / rive) above bars sorted by % revealed km
+function renderAreaStats(){
+  const el = document.getElementById("arr");
+  const grans = granList(); if (granIdx >= grans.length) granIdx = 0;
+  const gran = grans[granIdx], tot = granTotals(gran);
+  const rev = new Float64Array(gran.labels.length);
+  for (const ei of revList){ const gi=gran.group(ei); if (gi>=0 && gi<rev.length) rev[gi]+=EDGES[ei].k; }
+  const rows = gran.labels.map((lab,k)=>({lab, gi:k, pct: tot[k]? rev[k]/tot[k] : 0, has: tot[k]>0}))
+                  .filter(r=>r.has).sort((a,b)=> b.pct-a.pct);
+  const tabs = grans.map((g,i)=>`<button class="gtab${i===granIdx?" active":""}" data-g="${i}">${g.tab}</button>`).join("");
+  el.innerHTML = `<div class="gtabs">${tabs}</div>` + rows.map(r=>{
+    const p = (100*r.pct).toFixed(0), done = r.pct>=0.999, lab = /^\d+$/.test(r.lab) ? r.lab+"e" : r.lab;
+    return `<div class="arow" data-gi="${r.gi}"><span class="al">${escHtml(lab)}</span><span class="ap">${done?"✓":p+"%"}</span>`+
+           `<span class="abar"><span style="width:${p}%"></span></span></div>`;
+  }).join("");
+}
+
+// ---- guessing -------------------------------------------------------------
+const msgEl = document.getElementById("msg");
+let msgTimer;
+function flash(text, ok, ms=1600){
+  msgEl.textContent=text; msgEl.className = ok?"ok":"bad"; msgEl.style.opacity=1;
+  clearTimeout(msgTimer); msgTimer=setTimeout(()=>msgEl.style.opacity=0, ms);
+}
+
+// ---- toast (milestones), streak flourish, confetti celebration ------------
+const toastEl = document.getElementById("toast");
+let toastTimer;
+function toast(text){
+  toastEl.textContent = text; toastEl.classList.add("show");
+  clearTimeout(toastTimer); toastTimer = setTimeout(()=>toastEl.classList.remove("show"), 2200);
+}
+let lastPctMilestone = 0, celebratedArr = new Set(), celebratedQua = new Set(), celebratedRive = new Set();
+// bigger area (more total km) -> bigger confetti burst, quartier ~70 ... whole bank ~500
+function celebrateArea(label, totalKm){ toast(label); confetti(Math.round(Math.min(500, 40 + 13*Math.sqrt(totalKm)))); sound(3, 90000, true); }
+// mark already-finished areas so a restored/loaded game doesn't re-celebrate them
+function areaBaselines(){
+  celebratedQua.clear(); for (let k=0;k<quaKm.length;k++) if (quaTotKm[k]>0 && quaKm[k]/quaTotKm[k]>=0.999) celebratedQua.add(k);
+  celebratedRive.clear(); for (let k=0;k<3;k++) if (rivTotKm[k]>0 && rivKm[k]/rivTotKm[k]>=0.999) celebratedRive.add(k);
+}
+function checkMilestones(){
+  const pct = 100*revEdgeCount/EDGES.length;
+  for (const m of [1,5,10,25,50,75,90,100]){
+    if (pct >= m && lastPctMilestone < m){
+      lastPctMilestone = m;
+      toast((LANG==="fr"?`${m}% de Paris exploré !`:`${m}% of Paris explored!`));
+      confetti(m>=100 ? 260 : 90);
+      sound(2, 60000, true);
+    }
+  }
+  // area completions — burst scales with area size: quartier < arrondissement < whole bank
+  for (let k=0;k<quaKm.length;k++){                 // quartier (neighborhood)
+    if (!celebratedQua.has(k) && quaTotKm[k]>0 && quaKm[k]/quaTotKm[k] >= 0.999){
+      celebratedQua.add(k);
+      celebrateArea(LANG==="fr"?`Quartier ${D.qua[k]} terminé ! 🎉`:`${D.qua[k]} — neighborhood complete! 🎉`, quaTotKm[k]);
+    }
+  }
+  for (let k=0;k<NB;k++){                           // arrondissement
+    if (!celebratedArr.has(k) && arrTotKm[k]>0 && arrKm[k]/arrTotKm[k] >= 0.999){
+      celebratedArr.add(k);
+      celebrateArea(LANG==="fr"?`${ARR[k]}e arrondissement terminé ! 🎉`:`${ARR[k]}e arrondissement complete! 🎉`, arrTotKm[k]);
+    }
+  }
+  const rlab = [t("riveDroite"), t("riveGauche"), t("iles")];
+  for (let k=0;k<3;k++){                            // whole bank — the largest area, biggest burst
+    if (!celebratedRive.has(k) && rivTotKm[k]>0 && rivKm[k]/rivTotKm[k] >= 0.999){
+      celebratedRive.add(k);
+      celebrateArea(LANG==="fr"?`${rlab[k]} : 100 % ! 🎉🎉`:`${rlab[k]} 100% complete! 🎉🎉`, rivTotKm[k]);
+    }
+  }
+}
+function flourishStreak(){
+  const el = document.getElementById("strk");
+  if (el){ el.classList.remove("pop"); void el.offsetWidth; el.classList.add("pop"); }
+}
+
+// lightweight confetti on the #fx canvas
+const fxc = document.getElementById("fx"), fxx = fxc.getContext("2d");
+let confList = [], confRAF = 0;
+function confetti(n){
+  fxc.width = W*DPR; fxc.height = H*DPR; fxc.style.width=W+"px"; fxc.style.height=H+"px";
+  fxx.setTransform(DPR,0,0,DPR,0,0); fxc.style.display="block";
+  const cols = ["#ffcf5c","#ff7a59","#4aa3ff","#7dd8a0","#e0a92e","#fff"];
+  for (let i=0;i<n;i++) confList.push({
+    x: W*(0.2+0.6*fxRand()), y: H*0.28, vx:(fxRand()-0.5)*7, vy:-4-fxRand()*7,
+    g:0.22+fxRand()*0.12, r:3+fxRand()*4, c:cols[(i*7)%cols.length], a:1, rot:fxRand()*6, vr:(fxRand()-0.5)*0.4 });
+  if (!confRAF) confRAF = requestAnimationFrame(confStep);
+}
+let fxSeed = 12345;
+function fxRand(){ fxSeed = (fxSeed*1103515245+12345) & 0x7fffffff; return fxSeed/0x7fffffff; }
+function confStep(){
+  fxx.clearRect(0,0,W,H);
+  for (const p of confList){
+    p.vy += p.g; p.x += p.vx; p.y += p.vy; p.rot += p.vr; p.a -= 0.008;
+    fxx.save(); fxx.globalAlpha = Math.max(0,p.a); fxx.translate(p.x,p.y); fxx.rotate(p.rot);
+    fxx.fillStyle = p.c; fxx.fillRect(-p.r,-p.r*0.6,p.r*2,p.r*1.2); fxx.restore();
+  }
+  confList = confList.filter(p=>p.a>0 && p.y<H+20);
+  if (confList.length) confRAF = requestAnimationFrame(confStep);
+  else { confRAF = 0; fxc.style.display="none"; }
+}
+function submitGuess(){
+  if (daily && dailyEnded) return;
+  const inp = document.getElementById("guess");
+  const raw = inp.value.trim();
+  inp.value="";
+  if (raw){ history.push(raw); histPos = history.length; }   // shell-style: ↑ recalls last typed
+  // the query keeps its prefixes; each street is keyed both with and without one (see KEYS), so
+  // "porte jaune" and "rue de la porte jaune" both reach "Rue de la Porte Jaune"
+  const q = core(raw, false);
+  if (q.length < 2) return;
+  const md = ei => Math.min(...KEYS[ei].map(k => lev(q, k)));   // best edit distance across the edge's keys
+  const tol = 1;                               // accept the exact name plus or minus one typo
+  // Fixed-point reveal: reveal every REACHABLE edge whose key matches within tol. reveal() pulls each
+  // edge's <250m same-name group; revealing grows the frontier, so re-scan until a round adds nothing —
+  // this chains connected streets (Rue d'Arcole -> Pont d'Arcole) without dragging in a same-named but
+  // distant street (the two unrelated "Rue Michel-Ange", 3km apart).
+  const start = revList.length;
+  for (let grew=true; grew; ){
+    grew = false;
+    const reach = new Set();
+    for (const ni of frontier) for (const ei of nodeEdges[ni]) if (!revEdge[ei]) reach.add(ei);
+    for (const ei of reach) if (!revEdge[ei] && KEYS[ei].length && md(ei)<=tol){ reveal(ei); grew=true; }
+  }
+  // classify the outcome into independent buckets so we can report ALL that apply, not just the top one
+  const newIds = revList.slice(start), isNew = new Set(newIds);
+  const byName = new Map();                     // distinct streets revealed by THIS guess (name -> #segments)
+  let bounds = null;
+  for (const k of newIds){ byName.set(EDGES[k].n, (byName.get(EDGES[k].n)||0)+1);
+    bounds = bounds ? bounds.extend(edgeBounds(k)) : edgeBounds(k); }
+  const hidden = new Set(), already = new Set();  // exact-name matches: still-unreachable vs already-found
+  for (let i=0;i<KEYS.length;i++) if (KEYS[i].includes(q)){
+    if (!revEdge[i]) hidden.add(EDGES[i].n);
+    else if (!isNew.has(i) && !byName.has(EDGES[i].n)) already.add(EDGES[i].n);   // don't double-report a street we also just extended
+  }
+  let typo = false;                             // a reachable street ~2 typos away that we did NOT reveal
+  for (const ni of frontier){ for (const ei of nodeEdges[ni]) if (!revEdge[ei] && KEYS[ei].length && md(ei)===2){ typo=true; break; } if (typo) break; }
+  // glow every on-screen exact match we didn't just reveal, so you can spot what you meant under the fog
+  for (let i=0;i<KEYS.length;i++) if (KEYS[i].includes(q) && !isNew.has(i)) anim.push({type:"locate", ei:i, t:0});
+  if ((hidden.size || already.size) && !animRunning){ animRunning=true; requestAnimationFrame(animLoop); }
+  // one line per applicable case: each revealed street, the already-found ones, the unconnected exact
+  // ones, and a typo hint — so a correct-but-unconnected guess is never masked by a near-miss (feedback #7)
+  const lines = [];
+  for (const [nm,c] of byName) lines.push("✓ " + nm + (c>1 ? ` ×${c}` : ""));
+  if (already.size) lines.push(t("alreadyMsg")([...already].join(", ")));
+  if (hidden.size)  lines.push(t("hiddenMsg")([...hidden].join(", ")));
+  if (typo && !byName.size) lines.push(t("typoMsg"));
+  if (!lines.length) lines.push(t("noMatch"));
+  if (byName.size){                             // a real discovery: grow view, bump streak, check milestones
+    if (bounds && !map.getBounds().contains(bounds)){
+      const merged = map.getBounds().extend(bounds);
+      tweenTo(merged.getCenter(), zoomForBounds(merged, 80, map.getZoom()), 500);
+    }
+    streak++; bestStreak=Math.max(bestStreak,streak);
+    updateStats(); flourishStreak(); checkMilestones(); draw();
+    if (streak>=5 && streak%5===0){ lines[0] += `  🔥 ${streak}!`; toast(`🔥 ${streak} ${t("streak")}!`); }
+    if (daily) checkDailyWin();                 // daily route: reaching the target ends the run
+  } else { streak = 0; updateStats(); }
+  flash(lines.join("\n"), byName.size>0 || (already.size>0 && !hidden.size), 1400 + lines.length*600);   // green if you found/had it
+}
+const history = [];                              // raw submitted guesses; ↑/↓ walks them
+let histPos = 0;
+document.getElementById("guess").addEventListener("keydown", e=>{
+  const inp = e.target;
+  if (e.key==="Enter"){ submitGuess(); }
+  else if (e.key==="ArrowUp"){
+    if (!history.length) return;
+    e.preventDefault(); histPos = Math.max(0, histPos-1);
+    inp.value = history[histPos]; inp.setSelectionRange(inp.value.length, inp.value.length);
+  } else if (e.key==="ArrowDown"){
+    if (!history.length) return;
+    e.preventDefault(); histPos = Math.min(history.length, histPos+1);
+    inp.value = histPos < history.length ? history[histPos] : "";
+  }
+});
+document.getElementById("recenter").addEventListener("click", ()=>{ follow=true; fitRevealed(); });
+
+// ---- debug mode: hover a place to see the reveal-area it belongs to -----------
+const dbgPanel = document.getElementById("debug");
+function updateDebugPanel(){
+  if (!debug || hoverFace < 0){ dbgPanel.style.display = "none"; return; }
+  const f = FACES[hoverFace];
+  const names = [...new Set(f.e.map(ei=>EDGES[ei].n))];   // dedupe multi-segment streets by name
+  // a street is "done" only if every one of its segments bounding this face is revealed
+  const done = names.filter(n => f.e.filter(ei=>EDGES[ei].n===n).every(ei=>revEdge[ei]));
+  const todo = names.filter(n => !done.includes(n));
+  dbgPanel.innerHTML =
+    `<div class="dh">Reveal-area #${hoverFace} · ${done.length}/${names.length} streets</div>`+
+    todo.map(n=>`<div class="dt">◻ ${n}</div>`).join("")+
+    done.map(n=>`<div class="dd">✓ ${n}</div>`).join("");
+  dbgPanel.style.display = "block";
+}
+const plaqueTipEl = document.getElementById("plaqueTip");
+function plaqueAt(x, y){                           // nearest plaque within the (scaled) dot radius of (x,y), else -1
+  if (!PX || !PX.pl) return -1;
+  const R=2.4*markerScale()+6; let best=-1, bd=R*R;
+  for (let i=0;i<PLAQUES.length;i++){
+    if (!revEdge[PLAQUES[i].ei]) continue;         // only hoverable once its street is revealed
+    const px=PX.pl[2*i], py=PX.pl[2*i+1];
+    if (px<visMinX||px>visMaxX||py<visMinY||py>visMaxY) continue;
+    const dx=px*S+Tx-x, dy=py*S+Ty-y, d=dx*dx+dy*dy;
+    if (d<bd){ bd=d; best=i; }
+  }
+  return best;
+}
+function positionPlaqueTip(x, y){
+  const el=plaqueTipEl, w=el.offsetWidth, h=el.offsetHeight;
+  let bx=x+14, by=y+14;
+  if (bx+w>W-6) bx=x-w-14; if (bx<6) bx=6;
+  if (by+h>H-6) by=y-h-14; if (by<6) by=6;
+  el.style.left=bx+"px"; el.style.top=by+"px";
+}
+function hideTip(){ plaqueTipEl.style.display="none"; }
+function showPlaqueTip(i, x, y){
+  if (i<0){ hideTip(); return; }
+  const p=PLAQUES[i];
+  plaqueTipEl.innerHTML = (p.t?`<b>${escHtml(p.t)}</b>`:"") + escHtml(p.r||"") + (p.a?`<span class="padr">${escHtml(p.a)}</span>`:"");
+  plaqueTipEl.style.display="block"; positionPlaqueTip(x, y);
+}
+function sucetteAt(x, y){                          // Histoire-de-Paris panel whose pelle marker is under the cursor
+  if (!PX || !PX.su) return -1;
+  const ms=Math.min(markerScale(),1.5), hw=5*ms+3, ht=20*ms+2;   // marker: bottom tip at the spot, ~20*ms tall, ~5*ms half-wide
+  for (let i=0;i<SUCETTES.length;i++){
+    if (!revEdge[SUCETTES[i].ei]) continue;        // only hoverable once its street is revealed
+    const px=PX.su[2*i], py=PX.su[2*i+1];
+    if (px<visMinX||px>visMaxX||py<visMinY||py>visMaxY) continue;
+    const sx=px*S+Tx, sy=py*S+Ty;
+    if (x>=sx-hw && x<=sx+hw && y>=sy-ht && y<=sy+3) return i;
+  }
+  return -1;
+}
+function showSucetteTip(i, x, y){
+  if (i<0){ hideTip(); return; }
+  const p=SUCETTES[i];
+  plaqueTipEl.innerHTML = `<b>${escHtml(p.t||"Histoire de Paris")}</b>` + escHtml(p.r||"");
+  plaqueTipEl.style.display="block"; positionPlaqueTip(x, y);
+}
+let hoverRAF = 0;
+function onMouseMove(e){
+  const x = e.containerPoint.x, y = e.containerPoint.y;
+  let dirty = false;
+  const he = edgeAt(x, y);                        // revealed street name on hover (always on)
+  if (he !== hoverEdge){ hoverEdge = he; dirty = true; }
+  hoverXY = {x, y};
+  if (hoverEdge >= 0) dirty = true;               // reposition tooltip as the cursor moves along a street
+  const hs = sucetteAt(x, y);                      // Histoire-de-Paris panel takes priority over a plaque dot
+  const hp = hs >= 0 ? -1 : plaqueAt(x, y);        // commemorative plaque under cursor
+  if (hs !== hoverSucette || hp !== hoverPlaque){
+    hoverSucette = hs; hoverPlaque = hp; dirty = true;
+    if (hs >= 0) showSucetteTip(hs, x, y); else if (hp >= 0) showPlaqueTip(hp, x, y); else hideTip();
+  } else if (hs >= 0 || hp >= 0) positionPlaqueTip(x, y);
+  cv.style.cursor = (hoverEdge >= 0 || hs >= 0 || hp >= 0) ? "pointer" : "";
+  if (debug){
+    const f = faceAt(x, y);
+    if (f !== hoverFace){ hoverFace = f; dirty = true; updateDebugPanel(); }
+  }
+  if (dirty && !hoverRAF) hoverRAF = requestAnimationFrame(()=>{ hoverRAF=0; draw(); });  // coalesce to 1 redraw/frame
+}
+function toggleDebug(){
+  debug = !debug;
+  updateTitle();
+  if (!debug){ hoverFace = -1; }
+  if (map){
+    if (debug) map.on("contextmenu", onMapContextMenu);
+    else map.off("contextmenu", onMapContextMenu);
+  }
+  const ep = document.getElementById("edgepanel");
+  ep.style.display = debug ? "block" : "none";
+  if (debug) buildEdgePanel();
+  draw(); updateDebugPanel();
+}
+// debug sliders: fog boundary (displacement filter) + fog texture (the mist noise). Boundary edits
+// just redraw; texture edits re-bake the mist (makeCloud). Both feed feTurbulence.
+function buildEdgePanel(){
+  const el = document.getElementById("edgepanel");
+  if (el.dataset.built) return; el.dataset.built = "1";
+  const CFG = { edgeCfg, texCfg };                 // const configs aren't on window; look them up here
+  // [key, label, min, max, step, decimals]
+  const edgeRows = [
+    ["freq","Frequency",0.001,0.1,0.001,3], ["octaves","Octaves",1,6,1,0], ["seed","Seed",1,99,1,0],
+    ["scale","Displace",0,20,0.1,1], ["blur","Blur",0,1.5,0.05,2],
+  ];
+  const texRows = [
+    ["freq","Frequency",0.002,0.08,0.001,3], ["octaves","Octaves",1,6,1,0],
+    ["tint","Tint",0.5,1,0.01,2], ["opacity","Opacity",0,1,0.02,2],
+  ];
+  const slider = (cfg, k, lab, mn, mx, st, dp)=>
+    `<label><span>${lab}</span><input type="range" data-cfg="${cfg}" data-k="${k}" data-dp="${dp}" `+
+    `min="${mn}" max="${mx}" step="${st}" value="${CFG[cfg][k]}">`+
+    `<span class="v" id="ev_${cfg}_${k}">${(+CFG[cfg][k]).toFixed(dp)}</span></label>`;
+  el.innerHTML =
+    "<h4>Fog boundary</h4>" + edgeRows.map(r=>slider("edgeCfg",...r)).join("") +
+    `<label><span>Turbulence</span><input type="checkbox" data-cfg="edgeCfg" data-k="turb" ${edgeCfg.turb?"checked":""} style="flex:1"></label>`+
+    "<h4 style='margin-top:8px'>Fog texture</h4>" + texRows.map(r=>slider("texCfg",...r)).join("") +
+    `<label><span>Turbulence</span><input type="checkbox" data-cfg="texCfg" data-k="turb" ${texCfg.turb?"checked":""} style="flex:1"></label>`;
+  el.querySelectorAll("input[type=range]").forEach(inp=>{
+    const dp = +inp.dataset.dp, cfg = inp.dataset.cfg, k = inp.dataset.k;
+    inp.addEventListener("input", ()=>{
+      CFG[cfg][k] = parseFloat(inp.value);
+      document.getElementById("ev_"+cfg+"_"+k).textContent = parseFloat(inp.value).toFixed(dp);
+      if (cfg==="texCfg") makeCloud(); else { fogDirty = true; draw(); }
+    });
+  });
+  el.querySelectorAll("input[type=checkbox]").forEach(cb=>{
+    cb.addEventListener("change", ()=>{
+      CFG[cb.dataset.cfg][cb.dataset.k] = cb.checked?1:0;
+      if (cb.dataset.cfg==="texCfg") makeCloud(); else { fogDirty = true; draw(); }
+    });
+  });
+}
+window.addEventListener("keydown", e=>{
+  const tag = e.target && e.target.tagName;
+  if (e.key==="d" && !["INPUT","TEXTAREA","SELECT"].includes(tag) && !e.metaKey && !e.ctrlKey && !e.altKey){ toggleDebug(); }
+});
+
+// ---- click two revealed nodes to reveal the street joining exactly those two --
+function nodeAt(px, py){                          // nearest selectable (not-fully-revealed) node within grab radius
+  updateXform();
+  let best=-1, bd=18*18;
+  for (const ni of frontier){
+    const x = PX.n[2*ni]*S+Tx, y = PX.n[2*ni+1]*S+Ty;
+    const d = (x-px)**2 + (y-py)**2;
+    if (d < bd){ bd = d; best = ni; }
+  }
+  return best;
+}
+function debugUnreveal(ei){
+  setDebugHidden(ei, true);
+  const removed = new Set(nameGroup[ei] || [ei]);
+  const keep = revList.filter(k => !removed.has(k)).map(k => [k, edgeColor[k]]);
+  revEdge.fill(0); revNode.fill(0); revFace.fill(0); edgeColor.fill(null);
+  revList.length=0; faceList.length=0; anim.length=0; frontier.clear();
+  revEdgeCount=0; revKm=0; revArea=0; arrKm.fill(0); arrArea.fill(0); arrCntN.fill(0); quaKm.fill(0); rivKm.fill(0);
+  flashEdge=-1; flashT=0; selNode=-1; streak=0;
+  for (const [k,col] of keep){ reveal(k, true); if (col) edgeColor[k]=col; }
+  lastPctMilestone = 100*revEdgeCount/EDGES.length;
+  celebratedArr.clear();
+  for (let k=0;k<NB;k++) if (arrTotKm[k]>0 && arrKm[k]/arrTotKm[k]>=0.999) celebratedArr.add(k);
+  areaBaselines();
+  fogDirty=true; save(); updateStats(true); draw();
+  flash("− " + EDGES[ei].n, true);
+}
+function onMapContextMenu(e){
+  if (!debug || (daily && dailyEnded)) return;
+  if (e.originalEvent) L.DomEvent.preventDefault(e.originalEvent);
+  const ei = edgeAt(e.containerPoint.x, e.containerPoint.y);
+  if (ei < 0) return;
+  if (!revEdge[ei]){ flash(t("noMatch"), false); return; }
+  debugUnreveal(ei);
+}
+function onMapClick(e){
+  if (daily && dailyEnded) return;
+  const cx=e.containerPoint.x, cy=e.containerPoint.y;
+  const hsu = sucetteAt(cx, cy);                                  // tap a marker to read it (touch: no hover)
+  if (hsu >= 0){ hoverSucette = hsu; hoverPlaque = -1; showSucetteTip(hsu, cx, cy); draw(); return; }
+  const hp = plaqueAt(cx, cy);
+  if (hp >= 0){ hoverPlaque = hp; hoverSucette = -1; showPlaqueTip(hp, cx, cy); draw(); return; }
+  if (hoverPlaque >= 0 || hoverSucette >= 0){ hoverPlaque = -1; hoverSucette = -1; hideTip(); draw(); }
+  if (debug){
+    const ei = edgeAt(e.containerPoint.x, e.containerPoint.y);
+    if (ei >= 0){
+      if (revEdge[ei]) flash(t("alreadyThere"), true);
+      else { reveal(ei); updateStats(); draw(); flash(t("ok")(EDGES[ei].n), true); }
+      return;
+    }
+  }
+  const ni = nodeAt(e.containerPoint.x, e.containerPoint.y);
+  if (ni < 0){ selNode = -1; draw(); return; }
+  if (selNode < 0){ selNode = ni; draw(); return; }
+  if (ni === selNode){ selNode = -1; draw(); return; }   // click again to deselect
+  const a = Math.min(selNode, ni), b = Math.max(selNode, ni);
+  const ei = pairEdge.get(a+","+b);
+  selNode = -1;
+  if (ei !== undefined && !revEdge[ei]){
+    reveal(ei); streak++; bestStreak=Math.max(bestStreak,streak);
+    updateStats(); flourishStreak(); checkMilestones(); growViewToEdge(ei); draw();
+    flash(t("ok")(EDGES[ei].n), true);
+  } else {
+    draw();
+    flash(ei !== undefined ? t("alreadyThere") : t("noPair"), false);
+  }
+}
+
+// ---- animation loop: advances reveal draw-on / fill anims + flash ---------
+let animRunning = false;
+function animLoop(){
+  for (const A of anim) A.t = Math.min(1, A.t + (A.type==="hl" ? 0.012 : A.type==="locate" ? 0.02 : 0.06));   // hl: ~1.4s, locate: ~0.8s
+  for (let i=anim.length-1;i>=0;i--) if (anim[i].t>=1) anim.splice(i,1);
+  if (flashT>0) flashT = Math.max(0, flashT-0.03);
+  draw();
+  if (anim.length || flashT>0) requestAnimationFrame(animLoop);
+  else animRunning = false;
+}
+
+// ---- start ----------------------------------------------------------------
+function nearestEdge(lat, lon){
+  const COSLAT = Math.cos(lat*Math.PI/180); let best=0, bd=1e18;
+  for(let ei=0; ei<EDGES.length; ei++) for(const path of EDGES[ei].p) for(const [la,lo] of path){
+    const dx=(lo-lon)*COSLAT, dy=la-lat, d=dx*dx+dy*dy;
+    if(d<bd){ bd=d; best=ei; }
+  }
+  return best;
+}
+function begin(lat, lon){
+  const el=document.getElementById("loading"); if(el) el.remove();
+  map = L.map("map", { zoomControl:false, attributionControl:false, zoomAnimation:false, fadeAnimation:false,
+                       zoomSnap:0, minZoom:11, maxZoom:19, center:[48.8566,2.3522], zoom:13 });
+  map.attributionControl = L.control.attribution({ position:"bottomleft" }).addTo(map);
+  L.tileLayer("https://{s}.basemaps.cartocdn.com/rastertiles/voyager_nolabels/{z}/{x}/{y}{r}.png", {
+    subdomains:"abcd", detectRetina:true, maxZoom:20,
+    attribution:'&copy; OpenStreetMap &copy; CARTO'
+  }).addTo(map);
+  L.control.zoom({ position:"topleft" }).addTo(map);
+  precompute();                                    // bake world-pixel geometry + bboxes once
+  resize();
+  map.on("move zoom viewreset", ()=>{ fogDirty=true; draw(); });
+  map.on("dragstart", ()=>{ follow=false; dragging=true; });
+  map.on("dragend", ()=>{ dragging=false; fogDirty=true; draw(); });
+  map.on("zoomstart", ()=>{ dragging=true; });
+  map.on("zoomend", ()=>{ dragging=false; fogDirty=true; draw(); });
+  map.on("click", onMapClick);
+  if (debug) map.on("contextmenu", onMapContextMenu);
+  map.on("mousemove", onMouseMove);
+  map.on("mouseout", ()=>{ if(hoverEdge>=0||hoverFace>=0||hoverPlaque>=0||hoverSucette>=0){ hoverEdge=-1; hoverFace=-1; hoverPlaque=-1; hoverSucette=-1; hoverXY=null; hideTip(); draw(); updateDebugPanel(); } });
+  map.on("resize", ()=>{ resize(); draw(); if(follow) fitRevealed(); });   // fires when the map container changes size (mobile URL bar, rotate)
+  cv.parentElement.addEventListener("wheel", ()=> follow=false, { passive:true });
+  const onViewport = ()=>{ map.invalidateSize(false); resize(); draw(); };  // mobile: URL bar show/hide, rotation
+  window.addEventListener("resize", ()=>{ onViewport(); if(follow) fitRevealed(); });
+  window.addEventListener("orientationchange", ()=> setTimeout(onViewport, 250));
+  if (window.visualViewport) window.visualViewport.addEventListener("resize", onViewport);
+
+  let saved = loadSave();
+  if (saveHasProgress(saved)){
+    restoreSave(saved);                            // replay + heal across data changes; no flash/save spam
+  } else if (lat!=null){
+    reveal(nearestEdge(lat, lon));
+  }
+  // set milestone/celebration baselines from restored progress so we don't re-toast on load
+  lastPctMilestone = 100*revEdgeCount/EDGES.length;
+  for (let k=0;k<NB;k++) if (arrTotKm[k]>0 && arrKm[k]/arrTotKm[k]>=0.999) celebratedArr.add(k);
+  areaBaselines();
+  updateStats(true);                              // instant (no count-up from zero on load)
+  setSide(!MOBILE);                               // sidebar open on desktop, folded by default on phones
+  map.whenReady(()=>{ resize(); fitRevealed(); draw(); });
+  setTimeout(()=>{ resize(); draw(); }, 300);
+  document.getElementById("guess").focus();
+  maybeRejoin();                                  // reconnect to a saved room, or one from a #room= invite link
+}
+// always join a room so a shareable code is live. The room you're in IS your identity — solo just
+// means you're alone in it. An invite link wins; else rejoin the room you were last in; else make one.
+function maybeRejoin(){
+  if (daily || !Sync.available()) return;
+  buildRoomPanel(); renderRoster({}, null);       // show the panel immediately (code fills in once connected)
+  const link = (location.hash.match(/#room=([^&]+)/)||[])[1];
+  const prev = Sync.saved();
+  if (link) doJoin(decodeURIComponent(link), lastName);
+  else if (prev) doJoin(prev.code, prev.name);
+  else doJoin(newCode(), lastName);
+}
+// reveal the initial street after a start point is chosen (used by the not-in-Paris chooser)
+function seedStart(lat, lon){
+  if (revEdgeCount>0) return;                       // already seeded/restored
+  reveal(nearestEdge(lat, lon));
+  lastPctMilestone = 100*revEdgeCount/EDGES.length;
+  updateStats(true); fitRevealed(); draw();
+  document.getElementById("guess").focus();
+}
+function resetGame(){
+  if (!confirm(LANG==="fr"?"Réinitialiser toute la progression ?":"Reset all progress and start over?")) return;
+  Sync.leave();                                    // leaving clears the saved room, so reload makes a fresh code
+  try { localStorage.removeItem(SAVE_KEY); } catch(e){}
+  try { localStorage.removeItem(DEBUG_HIDE_KEY); } catch(e){}
+  try { history.replaceState(null, "", location.pathname); } catch(e){}  // drop any #room= invite so we don't rejoin it
+  location.reload();
+}
+
+// ---- language -------------------------------------------------------------
+function applyLang(){
+  document.documentElement.lang = LANG;
+  updateTitle();
+  document.getElementById("map").setAttribute("aria-label", t("mapLabel"));
+  document.getElementById("version").setAttribute("aria-label", `${t("versionLabel")} ${APP_VERSION}`);
+  const label = (id, value) => { const el=document.getElementById(id); el.title=value; el.setAttribute("aria-label", value); };
+  const guess = document.getElementById("guess");
+  guess.placeholder = t("placeholder"); guess.setAttribute("aria-label", t("placeholder"));
+  label("recenter", t("recenter"));
+  label("reset", t("reset"));
+  document.getElementById("langBtn").textContent = LANG==="fr" ? "EN" : "FR";
+  label("langBtn", t("lang"));
+  label("rulesBtn", t("rules"));
+  label("dailyBtn", t("daily"));
+  label("arrBtn", t("panel"));
+  label("fbBtn", t("feedback"));
+  const mc = document.getElementById("mergeCode");
+  if (mc){ mc.placeholder = t("mergePlaceholder");
+           mc.setAttribute("aria-label", t("mergePlaceholder"));
+           const roomCode=document.getElementById("roomCode"); roomCode.title = t("copyInvite");
+           roomCode.setAttribute("aria-label", t("copyInvite"));
+           const meName=document.getElementById("meName"); meName.placeholder = t("yourName");
+           meName.setAttribute("aria-label", t("yourName")); }
+  if (map) updateStats();
+}
+function updateTitle(){ document.getElementById("subtitle").textContent = debug ? t("debugMode") : t("subtitle"); }
+
+// ---- modal system ---------------------------------------------------------
+const overlay = document.getElementById("overlay"), modal = document.getElementById("modal");
+let modalLocked = false;                          // when true, clicking the backdrop won't close it
+let modalReturnFocus = null;
+const modalFocusables = () => [...modal.querySelectorAll('button:not([disabled]), input:not([disabled]), textarea:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])')];
+function showModal(html, locked){
+  modalReturnFocus = document.activeElement;
+  modal.innerHTML = html; overlay.style.display = "flex"; modalLocked = !!locked;
+  const heading = modal.querySelector("h2");
+  if (heading){ heading.id = "modalTitle"; modal.setAttribute("aria-labelledby", heading.id); }
+  else modal.removeAttribute("aria-labelledby");
+  requestAnimationFrame(()=> (modalFocusables()[0] || modal).focus());
+}
+function closeModal(){
+  overlay.style.display = "none"; modalLocked = false;
+  const target = modalReturnFocus; modalReturnFocus = null;
+  if (target && target.isConnected && typeof target.focus === "function") target.focus();
+}
+overlay.addEventListener("click", e=>{ if(e.target===overlay && !modalLocked) closeModal(); });
+overlay.addEventListener("keydown", e=>{
+  if (e.key !== "Tab") return;
+  const items = modalFocusables();
+  if (!items.length){ e.preventDefault(); modal.focus(); return; }
+  const first=items[0], last=items[items.length-1];
+  if (e.shiftKey && document.activeElement===first){ e.preventDefault(); last.focus(); }
+  else if (!e.shiftKey && document.activeElement===last){ e.preventDefault(); first.focus(); }
+});
+
+function showRules(onClose){
+  showModal(`<h2>${t("rulesTitle")}</h2>`+
+    t("rulesBody").map(p=>`<p>${p}</p>`).join("")+
+    `<button class="primary" id="rStart">${t("rulesStart")}</button>`+
+    `<p class="credit">${t("credit")}</p>`, true);
+  document.getElementById("rStart").onclick = ()=>{ closeModal(); if (typeof onClose==="function") onClose(); };
+}
+
+// start-point chooser (shown when the player isn't in Paris) -> calls done(lat,lon)
+function showStartChooser(done){
+  const places = t("startPlaces");
+  showModal(`<h2>${t("startTitle")}</h2><p>${t("startBody")}</p>`+
+    `<div id="startList">`+
+    places.map((p,i)=>`<button class="ghost" data-i="${i}" style="text-align:left">${p[0]}</button>`).join("")+
+    `<button class="ghost" data-i="rnd" style="text-align:left">🎲 ${t("startTypes")[1][1]}</button>`+
+    `</div>`, true);   // locked: must pick a start point
+  modal.querySelectorAll("#startList button").forEach(b=>{
+    b.onclick = ()=>{
+      closeModal();
+      if (b.dataset.i==="rnd"){
+        const p = places[Math.floor(Math.random()*places.length)]; done(p[1], p[2]);
+      } else { const p = places[+b.dataset.i]; done(p[1], p[2]); }
+    };
+  });
+}
+
+// ---- daily route mode: reach a target street from a start street, in the fewest streets/km/time --
+let timerIv = null, dailyEnded = false, dailyRAF = 0;
+let dailyStart = -1, dailyTarget = -1, dailyOptimal = 0, dailyOptimalKm = 0, dailyT0 = 0, dailyElapsed = 0;
+function daySeed(d){ return d.getUTCFullYear()*10000 + (d.getUTCMonth()+1)*100 + d.getUTCDate(); }
+function todaySeed(){ return daySeed(new Date()); }
+function yesterdaySeed(){ const d=new Date(); d.setUTCDate(d.getUTCDate()-1); return daySeed(d); }
+function seededEdge(seed){ let x=(seed*2654435761)%EDGES.length; if(x<0)x+=EDGES.length; return x; }
+function rng(seed){ let s=(seed>>>0)||1; return ()=>{ s=(s*1664525+1013904223)>>>0; return s/4294967296; }; }
+function bfsEdgeDist(start){                       // min #streets from start to every edge (edges adjacent when they share a node)
+  const dist = new Int32Array(EDGES.length).fill(-1);
+  dist[start]=0; const q=[start];
+  for (let h=0;h<q.length;h++){ const e=q[h];
+    for (const ni of EDGES[e].i) for (const e2 of nodeEdges[ni]) if (dist[e2]<0){ dist[e2]=dist[e]+1; q.push(e2); } }
+  return dist;
+}
+function dijkstraKm(start){                        // min total street-km to connect start to every edge (each edge costs its length)
+  const cost = new Float64Array(EDGES.length).fill(Infinity), heap = [];
+  const push=(c,e)=>{ heap.push([c,e]); let i=heap.length-1; while(i){ const p=(i-1)>>1; if(heap[p][0]<=heap[i][0])break; [heap[p],heap[i]]=[heap[i],heap[p]]; i=p; } };
+  const pop=()=>{ const top=heap[0], last=heap.pop(); if(heap.length){ heap[0]=last; let i=0; for(;;){ let l=2*i+1,r=l+1,s=i; if(l<heap.length&&heap[l][0]<heap[s][0])s=l; if(r<heap.length&&heap[r][0]<heap[s][0])s=r; if(s===i)break; [heap[s],heap[i]]=[heap[i],heap[s]]; i=s; } } return top; };
+  cost[start]=EDGES[start].k; push(cost[start], start);
+  while(heap.length){ const [c,e]=pop(); if(c>cost[e]) continue;
+    for (const ni of EDGES[e].i) for (const e2 of nodeEdges[ni]){ const nc=c+EDGES[e2].k; if(nc<cost[e2]){ cost[e2]=nc; push(nc,e2); } } }
+  return cost;
+}
+function optimalPathKm(start, target){             // the km-shortest route as an ordered edge list (Dijkstra + back-pointers)
+  const cost = new Float64Array(EDGES.length).fill(Infinity), prev = new Int32Array(EDGES.length).fill(-1), heap = [];
+  const push=(c,e)=>{ heap.push([c,e]); let i=heap.length-1; while(i){ const p=(i-1)>>1; if(heap[p][0]<=heap[i][0])break; [heap[p],heap[i]]=[heap[i],heap[p]]; i=p; } };
+  const pop=()=>{ const top=heap[0], last=heap.pop(); if(heap.length){ heap[0]=last; let i=0; for(;;){ let l=2*i+1,r=l+1,s=i; if(l<heap.length&&heap[l][0]<heap[s][0])s=l; if(r<heap.length&&heap[r][0]<heap[s][0])s=r; if(s===i)break; [heap[s],heap[i]]=[heap[i],heap[s]]; i=s; } } return top; };
+  cost[start]=EDGES[start].k; push(cost[start], start);
+  while(heap.length){ const [c,e]=pop(); if(c>cost[e]) continue;
+    for (const ni of EDGES[e].i) for (const e2 of nodeEdges[ni]){ const nc=c+EDGES[e2].k; if(nc<cost[e2]){ cost[e2]=nc; prev[e2]=e; push(nc,e2); } } }
+  const path=[]; for (let e=target; e>=0; e=prev[e]) path.push(e);
+  return path.reverse();
+}
+function optimalPathStreets(start, target){        // the fewest-streets route as an ordered edge list (BFS + back-pointers)
+  const prev = new Int32Array(EDGES.length).fill(-2); prev[start]=-1; const q=[start];
+  for (let h=0; h<q.length && prev[target]===-2; h++){ const e=q[h];
+    for (const ni of EDGES[e].i) for (const e2 of nodeEdges[ni]) if (prev[e2]===-2){ prev[e2]=e; q.push(e2); } }
+  const path=[]; for (let e=target; e>=0; e=prev[e]) path.push(e);
+  return path.reverse();
+}
+function dailyPair(seed){                          // deterministic start + a target 8-14 streets away (same for everyone)
+  const rand = rng(seed);                          // street-hops are coarse: the whole city is ~15 hops across
+  for (let tries=0; tries<40; tries++){
+    const start = Math.floor(rand()*EDGES.length), dist = bfsEdgeDist(start), cand = [];
+    for (let e=0;e<EDGES.length;e++) if (dist[e]>=8 && dist[e]<=14) cand.push(e);
+    if (cand.length>=20){ const target = cand[Math.floor(rand()*cand.length)]; return { start, target, optimal: dist[target], optimalKm: dijkstraKm(start)[target] }; }
+  }
+  const start = seededEdge(seed), dist = bfsEdgeDist(start);   // fallback: farthest reachable
+  let target=start, best=0; for (let e=0;e<EDGES.length;e++) if (dist[e]>best){ best=dist[e]; target=e; }
+  return { start, target, optimal: best, optimalKm: dijkstraKm(start)[target] };
+}
+function showDaily(){
+  const FR = LANG==="fr";
+  showModal(`<h2>${t("dailyTitle")}</h2>`+
+    `<p class="big">${FR?"Même trajet pour tout le monde aujourd'hui : reliez la rue de départ à la rue cible 🎯 en nommant le moins de rues possible. Le chrono tourne !":"Same route for everyone today: connect the start street to the target 🎯 by naming as few streets as possible. The clock is running!"}</p>`+
+    `<button class="primary" id="dStart">${t("dailyStart")}</button>`+
+    `<button class="ghost" id="dYesterday">${t("revealYest")}</button>`+
+    `<button class="ghost" id="dCancel">${t("playFree")}</button>`);
+  document.getElementById("dStart").onclick = startDaily;
+  document.getElementById("dYesterday").onclick = revealYesterday;
+  document.getElementById("dCancel").onclick = closeModal;
+}
+function clearBoard(){                             // wipe all reveal/progress state (shared by the daily entry points)
+  edgeColor.fill(null); debugHidden.clear();
+  revEdge.fill(0); revNode.fill(0); revFace.fill(0);
+  revList.length=0; faceList.length=0; anim.length=0; frontier.clear();
+  revEdgeCount=0; revKm=0; revArea=0; arrKm.fill(0); arrArea.fill(0); arrCntN.fill(0); quaKm.fill(0); rivKm.fill(0);
+  lastPctMilestone=0; celebratedArr.clear(); celebratedQua.clear(); celebratedRive.clear();
+  disp.streets=0; disp.km=0; disp.area=0;
+}
+function startDaily(){
+  closeModal();
+  Sync.leave(true);                               // daily is solo: drop live channels but KEEP the room so exit rejoins it
+  document.getElementById("room").style.display = "none";
+  daily = true; dailyEnded=false; streak=0; bestStreak=0;
+  document.getElementById("guess").disabled = false;
+  clearBoard();
+  setSide(false);
+  const pair = dailyPair(todaySeed());
+  dailyStart = pair.start; dailyTarget = pair.target; dailyOptimal = pair.optimal + 1;   // +1: start street counts too
+  dailyOptimalKm = pair.optimalKm;
+  reveal(dailyStart, true);
+  updateStats(true);
+  const bb = edgeBounds(dailyStart).extend(edgeBounds(dailyTarget));                       // frame start + goal
+  map.whenReady(()=> tweenTo(bb.getCenter(), zoomForBounds(bb, 90, 15), 600));
+  document.getElementById("guess").focus();
+  dailyT0 = Date.now(); dailyElapsed = 0;
+  document.getElementById("timer").style.display="block";
+  clearInterval(timerIv); timerIv = setInterval(tickTimer, 250); tickTimer();
+  if (!dailyRAF) dailyRAF = requestAnimationFrame(dailyLoop);
+  toast(LANG==="fr" ? `🎯 Cap sur ${EDGES[dailyTarget].n}` : `🎯 Head to ${EDGES[dailyTarget].n}`);
+}
+function dailyLoop(){ if(!daily||dailyEnded){ dailyRAF=0; return; } draw(); dailyRAF=requestAnimationFrame(dailyLoop); }  // pulse the target
+function tickTimer(){                              // count UP: elapsed time is a score to minimise
+  if (dailyEnded) return;
+  dailyElapsed = Date.now() - dailyT0;
+  const s = Math.floor(dailyElapsed/1000);
+  document.getElementById("timer").textContent = `⏱ ${Math.floor(s/60)}:${String(s%60).padStart(2,"0")}`;
+}
+function checkDailyWin(){ if (daily && !dailyEnded && dailyTarget>=0 && revEdge[dailyTarget]) winDaily(); }
+function fmtTime(ms){ const s=Math.floor(ms/1000); return `${Math.floor(s/60)}:${String(s%60).padStart(2,"0")}`; }
+function dailyGrid(streets, optimal){              // Wordle-style efficiency bar (optimal / your path)
+  const g = Math.round((streets>0?Math.min(1, optimal/streets):0)*5);
+  return (streets<=optimal?"🎯 ":"") + "🟩".repeat(g) + "⬜".repeat(5-g);
+}
+function winDaily(){
+  dailyEnded = true;
+  document.getElementById("guess").disabled = true;
+  document.getElementById("timer").style.display="none";
+  if (dailyRAF){ cancelAnimationFrame(dailyRAF); dailyRAF=0; }
+  clearInterval(timerIv);
+  confetti(220); sound(3, 90000, true);
+  const FR = LANG==="fr", streets = revEdgeCount, km = revKm, tstr = fmtTime(dailyElapsed), grid = dailyGrid(streets, dailyOptimal);
+  showModal(`<h2>${FR?"Arrivé ! 🎉":"Arrived! 🎉"}</h2>`+
+    `<p class="big">${EDGES[dailyStart].n} → <b>${EDGES[dailyTarget].n}</b> · ⏱ ${tstr}</p>`+
+    `<div class="stats-grid">`+
+      `<div class="sg"><b>${streets}</b><span>${t("streets")}</span></div>`+
+      `<div class="sg"><b>${dailyOptimal}</b><span>min ${t("streets")}</span></div>`+
+      `<div class="sg"><b>${km.toFixed(1)}</b><span>${t("km")}</span></div>`+
+      `<div class="sg"><b>${dailyOptimalKm.toFixed(1)}</b><span>min ${t("km")}</span></div>`+
+    `</div>`+
+    `<div class="share">${grid}</div>`+
+    `<button class="primary" id="shareBtn">${t("share")}</button>`+
+    `<button class="ghost" id="freeBtn">${t("playFree")}</button>`, true);
+  const link = location.origin+location.pathname+"#daily";
+  const text = `${t("result")(new Date().toISOString().slice(0,10))}\n${grid}\n${streets} ${t("streets")} (min ${dailyOptimal}) · ${km.toFixed(1)} ${t("km")} (min ${dailyOptimalKm.toFixed(1)}) · ${tstr}\n${link}`;
+  document.getElementById("shareBtn").onclick = ()=> navigator.clipboard.writeText(text).then(()=>flash(t("copied"), true));
+  document.getElementById("freeBtn").onclick = ()=>{ daily=false; closeModal(); location.reload(); };
+}
+function revealYesterday(mode){                    // spectator view: reveal yesterday's optimal route. mode: "km" | "streets"
+  mode = mode==="streets" ? "streets" : "km";      // (onclick passes an event; default to shortest-km)
+  closeModal();
+  Sync.leave(true);
+  document.getElementById("room").style.display = "none";
+  daily = true; dailyEnded = true; streak=0; bestStreak=0;   // ended: no timer, no guessing
+  document.getElementById("guess").disabled = true;
+  document.getElementById("timer").style.display = "none";
+  clearInterval(timerIv); if (dailyRAF){ cancelAnimationFrame(dailyRAF); dailyRAF=0; }
+  clearBoard();
+  setSide(false);
+  const pair = dailyPair(yesterdaySeed());
+  const path = (mode==="streets" ? optimalPathStreets : optimalPathKm)(pair.start, pair.target);
+  dailyStart = pair.start; dailyTarget = pair.target;
+  let bb = null;
+  for (const e of path){ reveal(e, true); bb = bb ? bb.extend(edgeBounds(e)) : edgeBounds(e); }   // quiet reveal, no save
+  updateStats(true); fogDirty = true;
+  map.whenReady(()=> tweenTo(bb.getCenter(), zoomForBounds(bb, 90, 15), 600));
+  draw();
+  const FR = LANG==="fr", tab = (m,label)=>`<button class="${m===mode?"primary":"ghost"}" id="y_${m}">${label}</button>`;
+  showModal(`<h2>${t("revealYest")}</h2>`+
+    `<p class="big">${EDGES[pair.start].n} → <b>${EDGES[pair.target].n}</b></p>`+
+    `<div class="stats-grid">`+
+      `<div class="sg"><b>${pair.optimal+1}</b><span>min ${t("streets")}</span></div>`+
+      `<div class="sg"><b>${pair.optimalKm.toFixed(1)}</b><span>min ${t("km")}</span></div>`+
+    `</div>`+
+    `<p>${FR?"Trajet révélé sur la carte :":"Route shown on the map:"}</p>`+
+    tab("streets", t("yestStreets")) + tab("km", t("yestKm")) +
+    `<button class="ghost" id="yFree">${t("playFree")}</button>`);
+  document.getElementById("y_streets").onclick = ()=> revealYesterday("streets");
+  document.getElementById("y_km").onclick = ()=> revealYesterday("km");
+  document.getElementById("yFree").onclick = ()=>{ daily=false; closeModal(); location.reload(); };
+}
+
+// ---- feedback form --------------------------------------------------------
+function showFeedback(){
+  const FR = LANG==="fr";
+  showModal(`<h2>${t("feedback")}</h2>`+
+    `<p>${FR?"Un bug, une idée, un mot ? Dites-moi tout.":"A bug, an idea, a kind word? Tell me anything."}</p>`+
+    `<textarea id="fbText" aria-label="${FR?"Votre message":"Your message"}" placeholder="${FR?"Votre message…":"Your message…"}"></textarea>`+
+    `<input id="fbContact" aria-label="${FR?"Email optionnel":"Optional email"}" placeholder="${FR?"Email (optionnel)":"Email (optional)"}">`+
+    `<button class="primary" id="fbSend">${FR?"Envoyer":"Send"}</button>`);
+  document.getElementById("fbSend").onclick = ()=>{
+    const msg = document.getElementById("fbText").value.trim();
+    const contact = document.getElementById("fbContact").value.trim();
+    if (!msg){ closeModal(); return; }
+    const btn = document.getElementById("fbSend");
+    btn.disabled = true; btn.textContent = FR?"Envoi…":"Sending…";
+    // FormSubmit (no backend/account): posts to the AJAX endpoint, which emails timothee.darcet@gmail.com
+    fetch("https://formsubmit.co/ajax/timothee.darcet@gmail.com", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Accept": "application/json" },
+      body: JSON.stringify({
+        _subject: "exp.lore.paris — feedback",
+        message: msg,
+        contact: contact || "(none)",
+        agent: navigator.userAgent,
+      }),
+    })
+    .then(r => { if(!r.ok) throw 0; return r.json(); })
+    .then(()=>{ closeModal(); flash(FR?"Merci pour votre retour !":"Thanks for the feedback!", true); })
+    .catch(()=>{ closeModal(); flash(FR?"Échec de l'envoi — réessayez plus tard":"Couldn't send — try again later", false); });
+  };
+}
+
+// ---- multiplayer: always in a room (sync.js). Bottom-right shows your room code; the box below
+//      merges another room by joining it (your progress travels with you — gossip union). --------
+function applyRemoteFound(v, live){                // v = {n, la, lo, by, c}; live=false while replaying history
+  if (daily) return;                              // daily is solo: never take remote reveals onto its board
+  const ei = resolveStreet(v.n, v.la, v.lo);
+  if (ei < 0) return;                             // unknown here
+  if (debugHidden.has(ei)) return;                // local debug overrides win over grow-only room history
+  const col = (Sync.me && v.by === Sync.me.id) ? null : v.c;
+  if (revEdge[ei]){                               // already have it (union): still let the finder's colour stick
+    if (col && edgeColor[ei] !== col){ edgeColor[ei] = col; fogDirty = true; if (live){ save(); draw(); } }
+    return;
+  }
+  applyingRemote = true; remoteColor = col;
+  const ok = reveal(ei, !live);                   // live remote finds animate; history replays silently
+  applyingRemote = false; remoteColor = null;
+  if (!ok) return;
+  if (live){
+    const who = roster[v.by] && roster[v.by].name;
+    if (who && (!Sync.me || v.by !== Sync.me.id)) flash(t("found")(who, EDGES[ei].n), true);
+    updateStats(); checkMilestones();
+  }
+}
+// build the room panel once (so roster updates don't clobber the merge textbox mid-typing)
+function buildRoomPanel(){
+  const el = document.getElementById("room");
+  if (el.dataset.built) return; el.dataset.built = "1";
+  el.innerHTML =
+    `<div class="rhdr"><button type="button" class="code" id="roomCode" title="${t("copyInvite")}" aria-label="${t("copyInvite")}"></button>`+
+    `<span class="rcount" id="roomCount"></span></div>`+
+    `<form class="me" id="meForm"><i id="meDot" aria-hidden="true"></i><input id="meName" maxlength="24" enterkeyhint="done" aria-label="${t("yourName")}" placeholder="${t("yourName")}"></form>`+
+    `<div class="peers" id="roomPeers"></div>`+
+    `<form class="merge" id="mergeForm"><input id="mergeCode" enterkeyhint="go" aria-label="${t("mergePlaceholder")}" placeholder="${t("mergePlaceholder")}" autocapitalize="characters" autocomplete="off"></form>`;
+  document.getElementById("roomCode").onclick = copyInvite;
+  const nameInp = document.getElementById("meName");
+  nameInp.value = lastName;
+  const rename = ()=>{                              // save the name; re-announce it to the room if connected
+    const v = nameInp.value.trim(); if (!v || v === lastName) return;
+    localStorage.setItem("paris-name", v); lastName = v;
+    if (Sync.code) doJoin(Sync.code, v);           // re-join same room to broadcast the new identity
+  };
+  nameInp.addEventListener("change", rename);
+  // real forms so the mobile soft-keyboard action key fires reliably (was advancing focus to #guess instead)
+  document.getElementById("meForm").addEventListener("submit", e=>{ e.preventDefault(); nameInp.blur(); });
+  const mergeInp = document.getElementById("mergeCode");
+  document.getElementById("mergeForm").addEventListener("submit", e=>{ e.preventDefault(); const v=mergeInp.value.trim(); if(v){ mergeInp.value=""; doJoin(v); } });
+}
+function renderRoster(players, me){                // only refresh the code + peer dots, never the textbox
+  roster = players || {};
+  buildRoomPanel();
+  const el = document.getElementById("room");
+  if (daily){ el.style.display = "none"; return; }
+  el.style.display = "block";
+  document.getElementById("roomCode").textContent = Sync.code ? Sync.code + " ⧉" : "…";
+  if (Sync.me) document.getElementById("meDot").style.background = Sync.me.color;
+  const ps = Object.values(roster);
+  document.getElementById("roomCount").textContent = ps.length > 1 ? `${ps.length} 👥` : "";
+  // peer dots exclude yourself (your name is shown in the editable field above); name on hover/tap
+  const peers = document.getElementById("roomPeers");
+  peers.replaceChildren();
+  for (const [id,p] of Object.entries(roster)){
+    if (Sync.me && id === Sync.me.id) continue;
+    const peer = p && typeof p === "object" ? p : {};
+    const nm = typeof peer.name === "string" ? peer.name.slice(0,24) : "Explorer";
+    const color = typeof peer.color === "string" && /^#[0-9a-fA-F]{6}$/.test(peer.color) ? peer.color : "#64748b";
+    const dot = document.createElement("button");
+    dot.type="button"; dot.className="peer"; dot.style.backgroundColor=color;
+    dot.title=nm; dot.setAttribute("aria-label", nm); dot.onclick=()=>flash(nm, true);
+    peers.appendChild(dot);
+  }
+}
+function copyInvite(){
+  if (!Sync.code) return;
+  const link = location.origin + location.pathname + "#room=" + Sync.code;
+  navigator.clipboard.writeText(link).then(()=> flash(t("copied"), true));
+}
+Sync.onFound(applyRemoteFound);
+Sync.onRoster(renderRoster);
+Sync.onSynced(()=>{ fogDirty = true; updateStats(); save(); draw(); });   // room history done: persist union + repaint
+
+let lastName = localStorage.getItem("paris-name") || "";
+const newCode = () => String(100000 + Math.floor(Math.random()*900000));   // fresh 6-digit room code, unique per device (Sync.join persists it)
+async function doJoin(codeInput, name){
+  name = (name||"").trim() || lastName || "Explorer";
+  localStorage.setItem("paris-name", name); lastName = name;
+  const code = (codeInput||"").trim().toUpperCase() || newCode();
+  const ok = await Sync.join(code, name);
+  if (!ok){ flash(t("joinFailed"), false); return; }
+  Sync.pushMany(revList.map(ei => { const p = edgePoint(ei); return [EDGES[ei].n, p[0], p[1]]; }));  // carry our progress into the room
+  renderRoster(roster, Sync.me);
+  flash(t("youJoined")(Sync.code), true);
+}
+
+document.getElementById("reset").addEventListener("click", resetGame);
+document.getElementById("langBtn").addEventListener("click", ()=> setLang(LANG==="fr"?"en":"fr"));
+document.getElementById("rulesBtn").addEventListener("click", showRules);
+document.getElementById("dailyBtn").addEventListener("click", showDaily);
+document.getElementById("fbBtn").addEventListener("click", showFeedback);
+function setSide(open){                            // show/hide the unified right sidebar and sync the ▤ chip
+  document.getElementById("side").classList.toggle("open", open);
+  const b=document.getElementById("arrBtn"); b.classList.toggle("on", open); b.setAttribute("aria-expanded", String(open));
+}
+document.getElementById("arrBtn").addEventListener("click", ()=> setSide(!document.getElementById("side").classList.contains("open")));
+document.getElementById("hist").addEventListener("click", e=>{
+  const b = e.target.closest(".hrow"); if (b) goToEdge(+b.dataset.ei);
+});
+const arrEl = document.getElementById("arr");
+arrEl.addEventListener("click", e=>{               // granularity toggle: arr / quartier / rive
+  const tab = e.target.closest(".gtab"); if (tab){ granIdx = +tab.dataset.g; hoverArea = null; renderAreaStats(); draw(); }
+});
+arrEl.addEventListener("mouseover", e=>{           // hovering a row outlines its region on the map
+  const row = e.target.closest(".arow");
+  const key = (granList()[granIdx] || {}).key || "";
+  const next = row ? { key, gi: +row.dataset.gi } : null;
+  const changed = (!!next !== !!hoverArea) || (next && (next.gi !== hoverArea.gi || next.key !== hoverArea.key));
+  if (changed){ hoverArea = next; draw(); }
+});
+arrEl.addEventListener("mouseleave", ()=>{ if (hoverArea){ hoverArea = null; draw(); } });
+window.addEventListener("keydown", e=>{ if(e.key==="Escape" && !modalLocked) closeModal(); });
+
+function boot(){
+  applyLang();
+  updateDayStreak();
+  if (typeof L === "undefined"){
+    document.getElementById("loading").textContent =
+      LANG==="fr" ? "Impossible de charger la carte (connexion requise)." : "Could not load the map library (need internet).";
+    return;
+  }
+  const wantDaily = location.hash === "#daily";
+  const firstTime = !localStorage.getItem("paris-seen-rules");
+  let saved = loadSave();
+  const inParis = (la,lo)=> la>48.80 && la<48.91 && lo>2.21 && lo<2.48;   // Paris commune bbox (+margin)
+
+  // run the onboarding chain: (optional rules) then (optional start-point chooser)
+  const onboard = (needChooser)=>{
+    const chooser = ()=>{ if (needChooser) showStartChooser((la,lo)=> seedStart(la,lo)); };
+    if (wantDaily){ startDaily(); return; }
+    if (firstTime){ localStorage.setItem("paris-seen-rules","1"); showRules(chooser); }
+    else chooser();
+  };
+
+  if (saveHasProgress(saved)){ begin(48.8566, 2.3522); onboard(false); return; }  // have progress
+  if (wantDaily){ begin(null, null); startDaily(); return; }              // daily seeds its own start
+  if (navigator.geolocation)
+    navigator.geolocation.getCurrentPosition(
+      p => {
+        if (inParis(p.coords.latitude, p.coords.longitude)){ begin(p.coords.latitude, p.coords.longitude); onboard(false); }
+        else { begin(null, null); onboard(true); }
+      },
+      () => { begin(null, null); onboard(true); },                        // denied/failed -> let them choose
+      { timeout: 6000 });
+  else { begin(null, null); onboard(true); }
+}
+boot();
+
+// PWA: register the service worker (offline app shell + tile cache). Ignored on file://.
+if ("serviceWorker" in navigator && location.protocol.startsWith("http"))
+  window.addEventListener("load", ()=> navigator.serviceWorker.register("sw.js").catch(()=>{}));
+</script>
+</body>
+</html>

@@ -1,0 +1,40 @@
+# build inputs & generated caches — not part of the deployed site
+.ign-venv/
+__pycache__/
+*.pyc
+
+# IGN BD TOPO source archive + extraction (build_ign.py input; re-downloadable)
+bdtopo_d075.7z
+bdtopo_d075_extracted/
+
+# OSM Overpass raw caches (build.py input; re-fetched if absent)
+paris_raw.json
+arr_raw.json
+plaza_raw.json
+
+# Paris Open Data quartier boundaries (build_areas.py input; re-fetched if absent)
+quartiers.geojson
+
+# Paris Open Data commemorative plaques raw API cache (build_plaques.py input; re-fetched if absent)
+plaques_raw.json
+
+# Sucettes "Histoire de Paris" pipeline: raw fetch cache, intermediate stage data, OCR language models
+# (all re-fetchable build inputs; the deployed output sucettes.js IS committed)
+sucettes/cache/
+sucettes/data/
+sucettes/tessdata/
+# ...except the VLM transcriptions: hand-produced by vision, not re-fetchable, so keep them
+!sucettes/data/vlm.json
+
+# Foglamp publish metadata (scan.lock.json contains the private edit token)
+.foglamp/
+
+# temporary sucette shape editor (not part of the deployed game)
+sucette_editor.html
+sucette_shape.json
+mathurins_debug.html
+
+# French lexical database (Lexique 3.83) for accent restoration — re-fetchable build input
+lexique.tsv
+# accent-restoration audit log (regenerated each build)
+lore_accent_audit.txt
