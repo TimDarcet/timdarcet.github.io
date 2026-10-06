@@ -142,6 +142,7 @@
            background: linear-gradient(180deg,#ffe8ac,#ffcf5c); padding: 9px 20px; border-radius: 999px;
            box-shadow: 0 6px 20px rgba(120,80,10,.4), inset 0 1px 0 rgba(255,255,255,.6); border: 1px solid #e0a92e; }
   #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+  #toast.action { pointer-events: auto; cursor: pointer; }
   @keyframes strkpop { 0%{ transform: scale(1);} 40%{ transform: scale(1.5);} 100%{ transform: scale(1);} }
   .strk.pop b { display: inline-block; animation: strkpop .45s ease; }
   #topright { position: fixed; right: 12px; top: 12px; z-index: 560; display: flex; gap: 6px; }
@@ -157,6 +158,9 @@
   .strk { color: #ffcf5c !important; } .strk b { color: #ffe08a; }
   #overlay { position: fixed; inset: 0; z-index: 800; display: none; align-items: center; justify-content: center;
              background: rgba(12,18,28,.62); backdrop-filter: blur(3px); padding: 16px; }
+  #overlay.learn { align-items: flex-start; padding-top: max(76px, calc(52px + env(safe-area-inset-top)));
+                   background: rgba(12,18,28,.24); backdrop-filter: none; }
+  #overlay.learn #modal { max-width: 390px; }
   #modal { background: #fff; color: #1f2a37; border-radius: 16px; max-width: 460px; width: 100%; padding: 24px;
            box-shadow: 0 18px 50px rgba(0,0,0,.4); max-height: 88vh; overflow-y: auto; }
   #modal h2 { font-size: 24px; margin-bottom: 14px; color: #12325f; font-family: "Fraunces", Georgia, serif; }
@@ -176,6 +180,10 @@
   #modal input, #modal textarea { width: 100%; border: 1px solid #cdd6e0; border-radius: 10px; padding: 10px;
            font-size: 14px; font-family: inherit; margin-bottom: 8px; }
   #modal textarea { min-height: 90px; resize: vertical; }
+  #modal .learn-mask { margin: 6px 0 16px; padding: 14px; border-radius: 10px; background: #f4f6f9;
+                       color: #12325f; text-align: center; font: 700 22px ui-monospace, monospace;
+                       letter-spacing: 1px; overflow-wrap: anywhere; }
+  #modal .learn-error { min-height: 20px; margin: -2px 0 0; color: #c5221f; text-align: center; font-size: 13px; }
   #modal .credit { margin-top: 14px; padding-top: 12px; border-top: 1px solid #e6eaf0; font-size: 12.5px;
                    color: #6a7684; text-align: center; margin-bottom: 0; }
   #modal .credit a { color: #1a73e8; }
@@ -254,7 +262,7 @@
 <script src="match.js"></script>
 <script src="sync.js"></script>
 <script>
-const APP_VERSION = "v8";
+const APP_VERSION = "v9";
 document.getElementById("version").textContent = APP_VERSION;
 const hudEl = document.getElementById("hud");
 function syncHudHeight(){ document.documentElement.style.setProperty("--hud-height", hudEl.offsetHeight + "px"); }
@@ -290,12 +298,15 @@ const I18N = {
     noMatch: "Hmm — no street here by that name",
     alreadyThere: "Already explored ✓",
     noPair: "No single street joins just those two junctions",
+    learnTitle: "Which street is this?", learnInput: "Type the street name…", learnTry: "Try",
+    learnIdk: "I don't know", learnIdkAgain: "Still don't know", learnShow: "Show me on the map",
+    learnWrong: "Not quite — try again or ask for a hint.", faded: "A street faded from memory", fadedGo: "Go to the faded street",
     blockDone: "Block cleared! ▪",
     rulesTitle: "exp.lore.paris",
     rulesBody: [
       "🗺️ The city is under fog. Reveal it street by street from memory.",
       "✏️ Type the name of any street touching a <b>glowing junction</b>, then Enter. Prefixes (rue, boulevard…) and accents are optional; one typo is forgiven.",
-      "🔗 Click two junctions to reveal the street connecting exactly those two.",
+      "🔗 Click two junctions, or one junction then a golden direction, to learn a street. Assisted streets fade later so you can recall them.",
       "▪️ Enclose a block on all sides and its interior clears automatically.",
       "↑ recalls your last guess · drag/scroll to move · ⌖ recenters · D toggles debug.",
     ],
@@ -337,12 +348,15 @@ const I18N = {
     noMatch: "Hmm — aucune rue de ce nom ici",
     alreadyThere: "Déjà exploré ✓",
     noPair: "Aucune rue unique ne relie exactement ces deux carrefours",
+    learnTitle: "Quelle est cette rue ?", learnInput: "Tapez le nom de la rue…", learnTry: "Essayer",
+    learnIdk: "Je ne sais pas", learnIdkAgain: "Toujours pas", learnShow: "Voir sur la carte",
+    learnWrong: "Pas tout à fait — réessayez ou demandez un indice.", faded: "Une rue s'est effacée de votre mémoire", fadedGo: "Aller à la rue effacée",
     blockDone: "Îlot dévoilé ! ▪",
     rulesTitle: "exp.lore.paris",
     rulesBody: [
       "🗺️ La ville est sous le brouillard. Dévoilez-la rue par rue, de mémoire.",
       "✏️ Tapez le nom d'une rue touchant un <b>carrefour lumineux</b>, puis Entrée. Les préfixes (rue, boulevard…) et accents sont optionnels ; une faute est tolérée.",
-      "🔗 Cliquez deux carrefours pour révéler la rue reliant exactement ces deux-là.",
+      "🔗 Cliquez deux carrefours, ou un carrefour puis une direction dorée, pour apprendre une rue. Les rues aidées s'effacent ensuite pour être retrouvées de mémoire.",
       "▪️ Encerclez un îlot de tous côtés et son intérieur se dévoile automatiquement.",
       "↑ rappelle votre dernière saisie · glisser/molette pour bouger · ⌖ recentre · D pour le debug.",
     ],
@@ -414,7 +428,10 @@ if (NQ) EDGES.forEach(e=>{ if (e.q>=0 && e.q<NQ) quaTotKm[e.q]+=e.k; });
 
 const SAVE_KEY = "paris-streets-progress";
 const DEBUG_HIDE_KEY = "paris-debug-hidden";
+const LEARN_KEY = "paris-streets-learning", LEARN_DELAYS = [864e5, 36e5, 6e5]; // no hint, half name, full name
 const debugHidden = new Set();
+const assisted = new Map();                     // every segment in a temporary street -> shared {ei,due,timer}
+let learningEi = -1, assisting = false;
 let daily = false;                               // daily-mode flag (no persistence)
 // signature of the current dataset: changes whenever edges are added/removed/renamed/reordered —
 // exactly when saved edge indices stop being valid. Lets us detect (and heal) saves after a rebuild.
@@ -642,7 +659,7 @@ function reveal(ei, replay){
   const filled = checkFaces(ei, replay);
   fogDirty = true;                                 // geometry changed -> rebuild cached fog
   // multiplayer: broadcast our own live discoveries; remote reveals are tinted by their finder
-  if (Sync.code && !daily){
+  if (Sync.code && !daily && !assisting){
     if (applyingRemote){ edgeColor[ei] = remoteColor; }
     else if (!replay){ const p = edgePoint(ei); Sync.pushOne(EDGES[ei].n, p[0], p[1]); }
   }
@@ -960,6 +977,20 @@ function markerScale(){                             // junction/plaque/sucette m
   const mpp = 156543.03392 * Math.cos(map.getCenter().lat*Math.PI/180) / Math.pow(2, map.getZoom());
   return Math.min(3, (18/mpp)/6);                   // capped above only — no floor, so zooming out shrinks them with the map
 }
+function stubEnd(ni, ei, len=34){                  // first few visible pixels of an unknown street leaving a selected junction
+  const nx=PX.n[2*ni], ny=PX.n[2*ni+1]; let path=null, at=0, bd=Infinity;
+  for (const a of PX.e[ei]) for (const k of [0,a.length-2]){
+    const d=(a[k]-nx)**2+(a[k+1]-ny)**2; if(d<bd){ bd=d; path=a; at=k; }
+  }
+  if (!path) return null;
+  const step=at===0?2:-2, end=step>0?path.length:-2; let x=nx*S+Tx, y=ny*S+Ty, left=len;
+  for (let k=at;k!==end;k+=step){
+    const qx=path[k]*S+Tx, qy=path[k+1]*S+Ty, d=Math.hypot(qx-x,qy-y);
+    if(d>=left) return {x:x+(qx-x)*left/d,y:y+(qy-y)*left/d};
+    left-=d; x=qx; y=qy;
+  }
+  return {x,y};
+}
 function draw(){
   if (!map || !PX) return;
   const z = map.getZoom();
@@ -1017,7 +1048,22 @@ function draw(){
       ctx.strokeStyle = `rgba(255,228,150,${0.85*fade*pulse})`;
       ctx.lineWidth = brush*0.5;
       ctx.beginPath(); strokePaths(A.ei); ctx.stroke();
+    } else if (A.type === "learn"){
+      const q=proj(...edgePoint(A.ei)), fade=Math.min(1,(1-A.t)*4), label=EDGES[A.ei].n;
+      ctx.font="700 15px ui-sans-serif,system-ui,sans-serif"; ctx.textAlign="center"; ctx.textBaseline="middle";
+      const w=ctx.measureText(label).width+20;
+      ctx.fillStyle=`rgba(255,255,255,${.92*fade})`; ctx.beginPath(); ctx.roundRect(q.x-w/2,q.y-17,w,34,9); ctx.fill();
+      ctx.strokeStyle=`rgba(224,169,46,${fade})`; ctx.lineWidth=1.5; ctx.stroke();
+      ctx.fillStyle=`rgba(18,50,95,${fade})`; ctx.fillText(label,q.x,q.y);
+    } else if (A.type === "forgot"){
+      const q=proj(...edgePoint(A.ei)), pulse=.5+.5*Math.sin(A.t*Math.PI*5), fade=1-A.t;
+      ctx.strokeStyle=`rgba(234,67,53,${fade})`; ctx.lineWidth=3;
+      ctx.beginPath(); ctx.arc(q.x,q.y,12+10*pulse,0,6.2832); ctx.stroke();
     }
+  }
+  if (learningEi>=0){                            // keep the chosen street tied to its clue window
+    ctx.strokeStyle="rgba(255,201,92,.95)"; ctx.lineWidth=Math.max(3,brush*.5);
+    ctx.beginPath(); strokePaths(learningEi); ctx.stroke();
   }
   // flash the newest reveal (kept for the persistent post-anim tint)
   if (flashT>0 && flashEdge>=0){
@@ -1055,6 +1101,14 @@ function draw(){
   //    edge). Once all its edges are revealed the node disappears. Click two to
   //    connect them and reveal the street joining exactly those two.
   const nr = 4 * ms;                             // junction marker, scaled with the map
+  if (selNode>=0){                               // short branches let one junction identify an outward street
+    const x=PX.n[2*selNode]*S+Tx, y=PX.n[2*selNode+1]*S+Ty;
+    ctx.strokeStyle="rgba(255,201,92,.95)"; ctx.lineWidth=Math.max(5,2.5*ms); ctx.lineCap="round";
+    for (const ei of nodeEdges[selNode]) if(!revEdge[ei]){
+      const p=stubEnd(selNode,ei); if(!p) continue;
+      ctx.beginPath(); ctx.moveTo(x,y); ctx.lineTo(p.x,p.y); ctx.stroke();
+    }
+  }
   for (const ni of frontier){
     const x = PX.n[2*ni]*S+Tx, y = PX.n[2*ni+1]*S+Ty;
     if (x<-10||x>W+10||y<-10||y>H+10) continue;
@@ -1261,9 +1315,93 @@ function flash(text, ok, ms=1600){
 // ---- toast (milestones), streak flourish, confetti celebration ------------
 const toastEl = document.getElementById("toast");
 let toastTimer;
-function toast(text){
-  toastEl.textContent = text; toastEl.classList.add("show");
-  clearTimeout(toastTimer); toastTimer = setTimeout(()=>toastEl.classList.remove("show"), 2200);
+function hideToast(){ toastEl.className=""; toastEl.onclick=null; toastEl.tabIndex=-1; }
+function toast(text, action, ms=2200){
+  toastEl.textContent=text; toastEl.className="show"+(action?" action":"");
+  toastEl.tabIndex=action?0:-1; toastEl.setAttribute("aria-label", action?t("fadedGo"):text);
+  toastEl.onclick=action?()=>{ hideToast(); action(); }:null;
+  clearTimeout(toastTimer); toastTimer=setTimeout(hideToast,ms);
+}
+toastEl.addEventListener("keydown", e=>{ if((e.key==="Enter"||e.key===" ")&&toastEl.onclick){ e.preventDefault(); toastEl.click(); } });
+
+// ---- assisted learning: map clue -> name clue -> temporary reveal --------
+const WORD_RX = /[\p{L}\p{N}]+/gu;
+let learningStage = 0;
+function initialsMask(name){ return name.replace(WORD_RX,w=>[...w].map((c,i)=>i?"_":c).join("")); }
+function halfMask(name){
+  const words=[...name.matchAll(WORD_RX)], key=w=>core(w,false); let body=0;
+  if(words.length){
+    if(words[1] && TYPE.has(key(words[0][0])+" "+key(words[1][0]))) body=2;
+    else if(TYPE.has(key(words[0][0]))) body=1;
+    while(words[body] && CONN.has(key(words[body][0]))) body++;
+  }
+  const start=words[body]?words[body].index:0;
+  let left=Math.ceil([...name.slice(start).matchAll(/[\p{L}\p{N}]/gu)].length/2);
+  return name.replace(WORD_RX,(w,at)=>at<start?w:[...w].map(c=>left-- > 0?c:"_").join(""));
+}
+function showLearning(ei){
+  if(ei==null || revEdge[ei] || (daily&&dailyEnded)) return;
+  learningEi=ei; learningStage=0; selNode=-1; draw();
+  showModal(`<h2>${t("learnTitle")}</h2><div class="learn-mask" id="learnMask" aria-live="polite">${escHtml(initialsMask(EDGES[ei].n))}</div>`+
+    `<form id="learnForm"><input id="learnInput" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" `+
+    `aria-label="${t("learnInput")}" placeholder="${t("learnInput")}"><button class="primary" id="learnTry">${t("learnTry")}</button></form>`+
+    `<p class="learn-error" id="learnError"></p><button class="ghost" id="learnIdk">${t("learnIdk")}</button>`);
+  overlay.classList.add("learn");
+  const form=document.getElementById("learnForm"), input=document.getElementById("learnInput"), idk=document.getElementById("learnIdk");
+  form.onsubmit=e=>{
+    e.preventDefault(); const q=core(input.value.trim(),false);
+    if(q && Math.min(...KEYS[ei].map(k=>lev(q,k)))<=1) finishLearning(learningStage);
+    else { document.getElementById("learnError").textContent=t("learnWrong"); input.select(); }
+  };
+  idk.onclick=()=>{
+    if(learningStage===0){
+      learningStage=1; document.getElementById("learnMask").textContent=halfMask(EDGES[ei].n);
+      document.getElementById("learnError").textContent=""; input.value=""; idk.textContent=t("learnIdkAgain"); input.focus();
+    } else if(learningStage===1){
+      learningStage=2; document.getElementById("learnMask").textContent=EDGES[ei].n;
+      form.style.display="none"; document.getElementById("learnError").textContent=""; idk.textContent=t("learnShow");
+    } else finishLearning(2);
+  };
+}
+function finishLearning(hints){
+  const ei=learningEi; if(ei<0) return;
+  learningEi=-1; closeModal(); assisting=true; const found=reveal(ei); assisting=false;
+  if(!found) return;
+  if(!daily) scheduleFade(ei,LEARN_DELAYS[hints]);
+  streak=0; growViewToEdge(ei); updateStats(); checkMilestones();
+  anim.push({type:"learn",ei,t:0}); if(!animRunning){ animRunning=true; requestAnimationFrame(animLoop); }
+  draw(); flash(t("ok")(EDGES[ei].n),true,4000); if(daily) checkDailyWin();
+}
+function saveAssisted(){
+  const s=[...new Set(assisted.values())].map(x=>{ const p=edgePoint(x.ei); return [EDGES[x.ei].n,p[0],p[1],x.due]; });
+  try { localStorage.setItem(LEARN_KEY,JSON.stringify(s)); } catch(e){}
+}
+function setAssisted(ei,due){
+  clearAssisted(ei,false); const item={ei,due,timer:0};
+  for(const k of nameGroup[ei]||[ei]) assisted.set(k,item);
+  item.timer=setTimeout(()=>fadeStreet(item),Math.max(0,due-Date.now())); return item;
+}
+function clearAssisted(ei,saveIt=true){
+  const item=assisted.get(ei); if(!item) return;
+  clearTimeout(item.timer); for(const [k,v] of assisted) if(v===item) assisted.delete(k);
+  if(saveIt) saveAssisted(); return item;
+}
+function scheduleFade(ei,delay){ setAssisted(ei,Date.now()+delay); saveAssisted(); }
+function restoreAssisted(){
+  let rows=[]; try { rows=JSON.parse(localStorage.getItem(LEARN_KEY)||"[]"); } catch(e){}
+  for(const [name,lat,lon,due] of Array.isArray(rows)?rows:[]){
+    const ei=resolveStreet(name,lat,lon); if(ei>=0&&revEdge[ei]&&Number.isFinite(due)) setAssisted(ei,due);
+  }
+  saveAssisted();
+}
+function fadeStreet(item){
+  if(!assisted.has(item.ei)||daily) return;
+  const ei=item.ei; clearAssisted(ei); rebuildWithout(ei);
+  toast(t("faded"),()=>goToFaded(ei),6500);
+}
+function goToFaded(ei){
+  follow=false; const bb=edgeBounds(ei); tweenTo(bb.getCenter(),Math.min(zoomForBounds(bb,140,17),17),650);
+  anim.push({type:"forgot",ei,t:0}); if(!animRunning){ animRunning=true; requestAnimationFrame(animLoop); }
 }
 let lastPctMilestone = 0, celebratedArr = new Set(), celebratedQua = new Set(), celebratedRive = new Set();
 // bigger area (more total km) -> bigger confetti burst, quartier ~70 ... whole bank ~500
@@ -1559,20 +1697,33 @@ function nodeAt(px, py){                          // nearest selectable (not-ful
   }
   return best;
 }
-function debugUnreveal(ei){
-  setDebugHidden(ei, true);
-  const removed = new Set(nameGroup[ei] || [ei]);
-  const keep = revList.filter(k => !removed.has(k)).map(k => [k, edgeColor[k]]);
+function stubAt(ni,px,py){
+  const ax=PX.n[2*ni]*S+Tx, ay=PX.n[2*ni+1]*S+Ty; let best=-1, bd=12*12;
+  for(const ei of nodeEdges[ni]) if(!revEdge[ei]){
+    const p=stubEnd(ni,ei); if(!p) continue;
+    const dx=p.x-ax, dy=p.y-ay, t=Math.max(0,Math.min(1,((px-ax)*dx+(py-ay)*dy)/(dx*dx+dy*dy||1)));
+    const d=(px-ax-t*dx)**2+(py-ay-t*dy)**2; if(d<bd){ bd=d; best=ei; }
+  }
+  return best;
+}
+function rebuildWithout(ei, resetCelebrations=false){
+  const removed=new Set(nameGroup[ei]||[ei]);
+  const keep=revList.filter(k=>!removed.has(k)).map(k=>[k,edgeColor[k]]);
   revEdge.fill(0); revNode.fill(0); revFace.fill(0); edgeColor.fill(null);
   revList.length=0; faceList.length=0; anim.length=0; frontier.clear();
   revEdgeCount=0; revKm=0; revArea=0; arrKm.fill(0); arrArea.fill(0); arrCntN.fill(0); quaKm.fill(0); rivKm.fill(0);
-  flashEdge=-1; flashT=0; selNode=-1; streak=0;
-  for (const [k,col] of keep){ reveal(k, true); if (col) edgeColor[k]=col; }
-  lastPctMilestone = 100*revEdgeCount/EDGES.length;
-  celebratedArr.clear();
-  for (let k=0;k<NB;k++) if (arrTotKm[k]>0 && arrKm[k]/arrTotKm[k]>=0.999) celebratedArr.add(k);
-  areaBaselines();
+  flashEdge=-1; flashT=0; selNode=-1; hoverEdge=-1;
+  for(const [k,col] of keep){ reveal(k,true); if(col) edgeColor[k]=col; }
+  if(resetCelebrations){
+    lastPctMilestone=100*revEdgeCount/EDGES.length; celebratedArr.clear();
+    for(let k=0;k<NB;k++) if(arrTotKm[k]>0&&arrKm[k]/arrTotKm[k]>=.999) celebratedArr.add(k);
+    areaBaselines();
+  }
   fogDirty=true; save(); updateStats(true); draw();
+}
+function debugUnreveal(ei){
+  setDebugHidden(ei, true);
+  clearAssisted(ei); streak=0; rebuildWithout(ei,true);
   flash("− " + EDGES[ei].n, true);
 }
 function onMapContextMenu(e){
@@ -1600,16 +1751,18 @@ function onMapClick(e){
     }
   }
   const ni = nodeAt(e.containerPoint.x, e.containerPoint.y);
-  if (ni < 0){ selNode = -1; draw(); return; }
+  if (ni < 0){
+    const ei=selNode>=0?stubAt(selNode,cx,cy):-1;
+    if(ei>=0){ showLearning(ei); return; }
+    selNode=-1; draw(); return;
+  }
   if (selNode < 0){ selNode = ni; draw(); return; }
   if (ni === selNode){ selNode = -1; draw(); return; }   // click again to deselect
   const a = Math.min(selNode, ni), b = Math.max(selNode, ni);
   const ei = pairEdge.get(a+","+b);
   selNode = -1;
   if (ei !== undefined && !revEdge[ei]){
-    reveal(ei); streak++; bestStreak=Math.max(bestStreak,streak);
-    updateStats(); flourishStreak(); checkMilestones(); growViewToEdge(ei); draw();
-    flash(t("ok")(EDGES[ei].n), true);
+    showLearning(ei);
   } else {
     draw();
     flash(ei !== undefined ? t("alreadyThere") : t("noPair"), false);
@@ -1619,7 +1772,7 @@ function onMapClick(e){
 // ---- animation loop: advances reveal draw-on / fill anims + flash ---------
 let animRunning = false;
 function animLoop(){
-  for (const A of anim) A.t = Math.min(1, A.t + (A.type==="hl" ? 0.012 : A.type==="locate" ? 0.02 : 0.06));   // hl: ~1.4s, locate: ~0.8s
+  for (const A of anim) A.t = Math.min(1, A.t + (A.type==="learn" ? .004 : A.type==="hl"||A.type==="forgot" ? .012 : A.type==="locate" ? .02 : .06));
   for (let i=anim.length-1;i>=0;i--) if (anim[i].t>=1) anim.splice(i,1);
   if (flashT>0) flashT = Math.max(0, flashT-0.03);
   draw();
@@ -1670,6 +1823,7 @@ function begin(lat, lon){
   } else if (lat!=null){
     reveal(nearestEdge(lat, lon));
   }
+  restoreAssisted();
   // set milestone/celebration baselines from restored progress so we don't re-toast on load
   lastPctMilestone = 100*revEdgeCount/EDGES.length;
   for (let k=0;k<NB;k++) if (arrTotKm[k]>0 && arrKm[k]/arrTotKm[k]>=0.999) celebratedArr.add(k);
@@ -1705,6 +1859,7 @@ function resetGame(){
   Sync.leave();                                    // leaving clears the saved room, so reload makes a fresh code
   try { localStorage.removeItem(SAVE_KEY); } catch(e){}
   try { localStorage.removeItem(DEBUG_HIDE_KEY); } catch(e){}
+  try { localStorage.removeItem(LEARN_KEY); } catch(e){}
   try { history.replaceState(null, "", location.pathname); } catch(e){}  // drop any #room= invite so we don't rejoin it
   location.reload();
 }
@@ -1744,14 +1899,15 @@ let modalReturnFocus = null;
 const modalFocusables = () => [...modal.querySelectorAll('button:not([disabled]), input:not([disabled]), textarea:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])')];
 function showModal(html, locked){
   modalReturnFocus = document.activeElement;
-  modal.innerHTML = html; overlay.style.display = "flex"; modalLocked = !!locked;
+  overlay.classList.remove("learn"); modal.innerHTML = html; overlay.style.display = "flex"; modalLocked = !!locked;
   const heading = modal.querySelector("h2");
   if (heading){ heading.id = "modalTitle"; modal.setAttribute("aria-labelledby", heading.id); }
   else modal.removeAttribute("aria-labelledby");
   requestAnimationFrame(()=> (modalFocusables()[0] || modal).focus());
 }
 function closeModal(){
-  overlay.style.display = "none"; modalLocked = false;
+  overlay.style.display = "none"; overlay.classList.remove("learn"); modalLocked = false;
+  if(learningEi>=0){ learningEi=-1; draw(); }
   const target = modalReturnFocus; modalReturnFocus = null;
   if (target && target.isConnected && typeof target.focus === "function") target.focus();
 }
@@ -2073,7 +2229,7 @@ async function doJoin(codeInput, name){
   const code = (codeInput||"").trim().toUpperCase() || newCode();
   const ok = await Sync.join(code, name);
   if (!ok){ flash(t("joinFailed"), false); return; }
-  Sync.pushMany(revList.map(ei => { const p = edgePoint(ei); return [EDGES[ei].n, p[0], p[1]]; }));  // carry our progress into the room
+  Sync.pushMany(revList.filter(ei=>!assisted.has(ei)).map(ei => { const p = edgePoint(ei); return [EDGES[ei].n, p[0], p[1]]; }));
   renderRoster(roster, Sync.me);
   flash(t("youJoined")(Sync.code), true);
 }
