@@ -1,5 +1,5 @@
 // Service worker: offline app shell + runtime tile cache. Bump CACHE to invalidate on deploy.
-const CACHE = "paris-v10";
+const CACHE = "paris-v11";
 const CACHE_PREFIX = "paris-";
 const SHELL = [
   "./",
@@ -32,7 +32,7 @@ self.addEventListener("fetch", e => {
   const req = e.request;
   if (req.method !== "GET") return;
   const url = new URL(req.url);
-  const isTile = /basemaps\.cartocdn\.com/.test(url.host) || /fonts\.(googleapis|gstatic)\.com/.test(url.host);
+  const isTile = /server\.arcgisonline\.com/.test(url.host) || /fonts\.(googleapis|gstatic)\.com/.test(url.host);
 
   if (isTile) {
     // stale-while-revalidate for map tiles & fonts (cache grows as you explore; works offline after)
