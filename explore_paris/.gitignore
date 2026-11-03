@@ -10,6 +10,7 @@ bdtopo_d075_extracted/
 # OSM Overpass raw caches (build.py input; re-fetched if absent)
 paris_raw.json
 arr_raw.json
+voies_raw.json
 plaza_raw.json
 
 # Paris Open Data quartier boundaries (build_areas.py input; re-fetched if absent)

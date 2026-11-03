@@ -289,7 +289,7 @@ const I18N = {
     streets: "streets", km: "km", area: "km²", reachable: "reachable now",
     streak: "streak", byArr: "By arrondissement", dayStreak: "day streak",
     recent: "Recent finds", recentEmpty: "Streets you find will appear here", panel: "Progress & recent finds",
-    gArr: "Arr.", gQua: "Quartier", gRive: "Bank",
+    gArr: "Arr.", gQua: "Quartier", gRive: "Bank", gType: "Type", gOther: "Other",
     riveDroite: "Right bank", riveGauche: "Left bank", iles: "Islands",
     ok: n=>"✓ "+n,
     hiddenMsg: n=>`◌ ${n} — exists but isn't connected to your area yet`,
@@ -339,7 +339,7 @@ const I18N = {
     streets: "rues", km: "km", area: "km²", reachable: "accessibles",
     streak: "série", byArr: "Par arrondissement", dayStreak: "jours d'affilée",
     recent: "Découvertes récentes", recentEmpty: "Les rues trouvées s'afficheront ici", panel: "Progression & découvertes",
-    gArr: "Arr.", gQua: "Quartier", gRive: "Rive",
+    gArr: "Arr.", gQua: "Quartier", gRive: "Rive", gType: "Type", gOther: "Autre",
     riveDroite: "Rive droite", riveGauche: "Rive gauche", iles: "Îles",
     ok: n=>"✓ "+n,
     hiddenMsg: n=>`◌ ${n} — existe mais pas encore reliée à votre zone`,
@@ -464,11 +464,14 @@ function riveOf(ei){                              // 0 = right bank, 1 = left ba
 const rivTotKm = new Float64Array(3), rivKm = new Float64Array(3);
 EDGES.forEach((e,i)=>{ const r=riveOf(i); if (r>=0) rivTotKm[r]+=e.k; });
 const hasQuartiers = () => Array.isArray(D.qua) && D.qua.length > 0 && EDGES[0] && EDGES[0].q !== undefined;
+// street type = first word of the name ("Rue", "Avenue"…); types with <30 sections are pooled into "other"
+const TYPES = (()=>{ const n={}; EDGES.forEach(e=>{ const w=e.n.split(" ")[0]; n[w]=(n[w]||0)+1; }); return Object.keys(n).filter(w=>n[w]>=30); })();
 let granIdx = 0;                                  // selected granularity (index into granList())
-function granList(){                              // built fresh so labels track the language; order: arr, quartier, rive
+function granList(){                              // built fresh so labels track the language; order: arr, quartier, rive, type
   const g = [{ key:"arr", tab:t("gArr"), labels: ARR, group: ei => { const a=EDGES[ei].a; return (a>=0&&a<ARR.length)?a:-1; } }];
   if (hasQuartiers()) g.push({ key:"qua", tab:t("gQua"), labels: D.qua, group: ei => { const q=EDGES[ei].q; return (q>=0&&q<D.qua.length)?q:-1; } });
   g.push({ key:"riv", tab:t("gRive"), labels: [t("riveDroite"), t("riveGauche"), t("iles")], group: riveOf });
+  g.push({ key:"typ", tab:t("gType"), labels: [...TYPES, t("gOther")], group: ei => { const i=TYPES.indexOf(EDGES[ei].n.split(" ")[0]); return i>=0?i:TYPES.length; } });
   return g;
 }
 const granTotCache = {};                          // per-granularity total km per group (denominators), computed once
@@ -498,6 +501,7 @@ function areaHull(key, gi){
   return hullCache[ck] = convexHull(pts);
 }
 function areaPolys(key, gi){                        // exact baked boundary (array of [lat,lon] rings); hull if absent
+  if (key==="typ") return [];                       // street types span all of Paris: nothing to outline
   const src = key==="arr" ? D.arrPoly : key==="qua" ? D.quaPoly : key==="riv" ? D.rivPoly : null;
   const p = src && src[gi];
   if (p && p.length) return p;

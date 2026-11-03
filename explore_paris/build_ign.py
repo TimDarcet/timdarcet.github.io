@@ -7,7 +7,7 @@ separates real roads from paths/stairs, and official BAN names avoid OSM's typos
 OSM-specific front-end (EXCLUDE_HW guesswork, cycleway rescue, typo detection) is gone here — we
 just filter `troncon_de_route` by nature+name, clip to the Paris commune, and hand the segments to
 build.build_from_ways(), which planarizes and emits the identical window.PARIS contract."""
-import sys, glob, os, re, collections
+import sys, glob, os, re, collections, unicodedata, json, urllib.request
 import geopandas as gpd
 import shapely
 from shapely.geometry import shape, LineString
@@ -35,9 +35,12 @@ ABBR = {"R": "Rue", "AV": "Avenue", "BD": "Boulevard", "PL": "Place", "ALL": "Al
         "SQ": "Square", "PAS": "Passage", "VLA": "Villa", "QU": "Quai", "CHE": "Chemin", "RTE": "Route",
         "CRS": "Cours", "SEN": "Sente", "GAL": "Galerie", "SNT": "Sentier", "PROM": "Promenade",
         "CAR": "Carrefour", "RPT": "Rond-point", "PRV": "Parvis", "HAM": "Hameau", "PTE": "Porte",
-        "ARC": "Arcades", "PSTY": "Péristyle", "CITE": "Cité", "RUELL": "Ruelle", "ESP": "Esplanade",
+        "ARC": "Arcades", "PSTY": "Péristyle", "CITE": "Cité", "RUELL": "Ruelle", "ESP": "Esplanade", "ESC": "Escalier",
+        "BUT": "Butte", "CARR": "Carré", "MAR": "Marché", "MANEGE": "Manège", "BOULECARD": "Boulevard",
         "PLE": "Passerelle", "VGE": "Village", "RPE": "Rampe", "TSSE": "Terrasse", "RES": "Résidence",
         "VOI": "Voie", "TUN": "Tunnel", "AUT": "Autoroute", "COR": "Corniche", "MAIL": "Mail"}
+# collaboratif names contradicted by OSM, BAN and the Paris street nomenclature at the same location
+RENAME = {"Carré Marigny": "Avenue Gabriel", "Rond des Melezes": "Rond des Mélèzes", "Avenue Georges Clémenceau": "Avenue Georges Clemenceau"}
 def expand_abbr(s):
     if not isinstance(s, str) or not s: return s
     s = re.sub(r"\(s\)", "", s, flags=re.I)          # drop BD TOPO's allée/allées plural marker ("ALLEE(S)")
@@ -52,6 +55,41 @@ def expand_abbr(s):
             w = t.title() if t.isupper() else t      # Title-case other ALL-CAPS body words
         tail.append(w.lower() if w in LOW else w)    # but lowercase French connectors
     return " ".join([head] + tail)
+
+VOIES_RAW = "voies_raw.json"
+def fetch_voies():
+    """Official Paris street names (nomenclature des voies), cached like the other raw inputs."""
+    if not os.path.exists(VOIES_RAW):
+        urllib.request.urlretrieve("https://opendata.paris.fr/api/explore/v2.1/catalog/datasets/"
+                                   "denominations-emprises-voies-actuelles/exports/json?select=typo_min", VOIES_RAW)
+    return [r["typo_min"] for r in json.load(open(VOIES_RAW))]
+
+def tidy_names(names, official):
+    """{old: new} over all segment names. A name the official nomenclature knows (same letters, ignoring
+    accents, case and punctuation) takes the official spelling. Others get mid-name L'/D' and ordinals
+    lowercased ("1Er" -> "1er") and accents restored per word when unambiguous: the official names always
+    spell that word one accented way, never bare. Remaining variants of a street are then unified."""
+    bare = lambda s: "".join(c for c in unicodedata.normalize("NFD", s) if not unicodedata.combining(c))
+    key = lambda s: re.sub(r"[^a-z0-9]+", " ", bare(s).lower()).strip()
+    off = {key(o): re.sub(r"(^| - )(\w)", lambda m: m[1] + m[2].upper(), o) for o in official}
+    spell = collections.defaultdict(set)
+    for o in official:
+        for w in re.findall(r"[^\W\d_]+", o.lower()): spell[bare(w)].add(w)
+    def accent(w):
+        a = spell.get(bare(w).lower(), set())
+        if w != bare(w) or len(a) != 1 or w.lower() in a | {"cave", "halle", "aube", "poe"}: return w   # not Cavé/Hallé/Aubé, nor the official "rue Edgar Poë" spelling
+        a = next(iter(a)); return a[0].upper() + a[1:] if w[0].isupper() else a
+    def fix(n):
+        if key(n) in off: return off[key(n)]
+        n = re.sub(r"(?<=[\s-])([LD])'(\w)", lambda m: m[1].lower() + "'" + m[2].upper(), n)
+        n = re.sub(r"\b(\d+)(Er|Ere|Eme|E)\b", lambda m: m[1] + {"Er": "er", "Ere": "re"}.get(m[2], "e"), n)
+        return re.sub(r"[^\W\d_]+", lambda m: accent(m[0]), n)
+    fixed = {n: fix(n) for n in set(names)}
+    cnt = collections.Counter(fixed[n] for n in names)
+    groups = collections.defaultdict(list)
+    for v in cnt: groups[key(v)].append(v)
+    best = {v: max(g, key=lambda x: (sum(a != b for a, b in zip(x, bare(x))), cnt[x])) for g in groups.values() for v in g}
+    return {n: best[fixed[n]] for n in set(names) if best[fixed[n]] != n}
 
 def osm_donors(ign_named):
     """OSM named streets eligible to donate a name: same filtering as an OSM build (build.py), then
@@ -147,10 +185,12 @@ def main(arg, extra_nature=(), out=OUT):
     ban = g["nom_voie_ban_gauche"].fillna(g["nom_voie_ban_droite"]).fillna(g["cpx_toponyme_route_nommee"])
     col = g["nom_collaboratif_gauche"].fillna(g["nom_collaboratif_droite"]).map(expand_abbr)
     g["_nm"] = ban.fillna(col).str.replace(r"\s*\((?:[Dd]it|ex|anc\.?|ancien)[^)]*\)", "", regex=True).str.strip()  # drop alias parentheticals ("(Dit des Amandiers)")
+    g["_nm"] = g["_nm"].replace(RENAME)
     ign_named = {build.norm_name(x) for x in g["_nm"].dropna().unique() if str(x).strip()}
     n_rec = recover_names(g, ign_named)                             # borrow OSM names for gap segments
     g = g[g["_nm"].notna() & (g["_nm"] != "")]
     g = g[~g["_nm"].str.contains(r"\b\w{1,3}/\d+\b", regex=True)]   # drop internal codes ("Voie M/18", "Vc Fi/13")
+    g["_nm"] = g["_nm"].replace(tidy_names(g["_nm"].tolist(), fetch_voies()))
     n_ban = ban.notna().sum(); n_col = (ban.isna() & col.notna()).sum()
     print(f"{len(g)} named road segments in Paris ({n_ban} BAN, {n_col} collaboratif-only, {n_rec} OSM-recovered)", file=sys.stderr)
 
