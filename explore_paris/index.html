@@ -436,7 +436,7 @@ const debugHidden = new Set();
 const assisted = new Map();                     // every segment in a temporary street -> shared {ei,due,timer}
 let learningEi = -1, assisting = false;
 let daily = false;                               // daily-mode flag (no persistence)
-const SRS_KEY = "paris-srs", SRS_BASE = 3e4;      // spaced repetition: a street at recall level r fades after 30s × 2^r
+const SRS_KEY = "paris-srs", SRS_BASE = 6e4;      // spaced repetition: a street at recall level r fades after 1min × 3^r
 let srs = { on:false, reps:{} };                 // reps: street name -> recall level
 try { srs = JSON.parse(localStorage.getItem(SRS_KEY)) || srs; } catch(e){}
 // signature of the current dataset: changes whenever edges are added/removed/renamed/reordered —
@@ -1417,7 +1417,7 @@ function goToFaded(ei){
 }
 function srsReview(names, recalled){               // bump (or reset) each street's level, then schedule every unscheduled revealed street
   for(const nm of names) srs.reps[nm]=recalled?(srs.reps[nm]??0)+1:0;
-  if(srs.on) for(const ei of revList) if(!assisted.has(ei)) setAssisted(ei,Date.now()+SRS_BASE*2**(srs.reps[EDGES[ei].n]??1));
+  if(srs.on) for(const ei of revList) if(!assisted.has(ei)) setAssisted(ei,Date.now()+SRS_BASE*3**(srs.reps[EDGES[ei].n]??1));
   try { localStorage.setItem(SRS_KEY,JSON.stringify(srs)); } catch(e){}
   saveAssisted();
 }
