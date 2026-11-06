@@ -143,6 +143,11 @@
            box-shadow: 0 6px 20px rgba(120,80,10,.4), inset 0 1px 0 rgba(255,255,255,.6); border: 1px solid #e0a92e; }
   #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
   #toast.action { pointer-events: auto; cursor: pointer; }
+  #ctxMenu { position: fixed; z-index: 610; display: none; padding: 4px; background: #fff; border: 1px solid #cdd6e0;
+             border-radius: 9px; box-shadow: 0 6px 20px rgba(20,28,40,.3); }
+  #ctxMenu button { border: 0; background: none; padding: 7px 12px; border-radius: 6px; font: inherit; font-size: 13px;
+                    color: #c5221f; cursor: pointer; white-space: nowrap; }
+  #ctxMenu button:hover { background: #fdecea; }
   @keyframes strkpop { 0%{ transform: scale(1);} 40%{ transform: scale(1.5);} 100%{ transform: scale(1);} }
   .strk.pop b { display: inline-block; animation: strkpop .45s ease; }
   #topright { position: fixed; right: 12px; top: 12px; z-index: 560; display: flex; gap: 6px; }
@@ -254,6 +259,7 @@
 <!-- modal overlay (rules / daily / result / feedback) -->
 <div id="overlay"><div id="modal" role="dialog" aria-modal="true" tabindex="-1"></div></div>
 <div id="toast" role="status" aria-live="polite"></div>
+<div id="ctxMenu"></div>
 <canvas id="fx" aria-hidden="true"></canvas>
 <div id="loading" role="status">Loading map of Paris…</div>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -302,7 +308,7 @@ const I18N = {
     learnTitle: "Which street is this?", learnInput: "Type the street name…", learnTry: "Try",
     learnIdk: "I don't know", learnIdkAgain: "Still don't know", learnShow: "Show me on the map",
     learnWrong: "Not quite — try again or ask for a hint.", faded: "A street faded from memory", fadedGo: "Go to the faded street",
-    srs: "Spaced repetition", srsOn: "Spaced repetition on: streets you find now fade, and stay longer each time you recall them", srsOff: "Spaced repetition off",
+    srs: "Spaced repetition", srsOn: "Spaced repetition on: streets you find now fade, and stay longer each time you recall them", srsOff: "Spaced repetition off", forget: n=>`Forget ${n}`,
     blockDone: "Block cleared! ▪",
     rulesTitle: "exp.lore.paris",
     rulesBody: [
@@ -353,7 +359,7 @@ const I18N = {
     learnTitle: "Quelle est cette rue ?", learnInput: "Tapez le nom de la rue…", learnTry: "Essayer",
     learnIdk: "Je ne sais pas", learnIdkAgain: "Toujours pas", learnShow: "Voir sur la carte",
     learnWrong: "Pas tout à fait — réessayez ou demandez un indice.", faded: "Une rue s'est effacée de votre mémoire", fadedGo: "Aller à la rue effacée",
-    srs: "Répétition espacée", srsOn: "Répétition espacée activée : les rues trouvées s'effacent, et restent plus longtemps à chaque rappel", srsOff: "Répétition espacée désactivée",
+    srs: "Répétition espacée", srsOn: "Répétition espacée activée : les rues trouvées s'effacent, et restent plus longtemps à chaque rappel", srsOff: "Répétition espacée désactivée", forget: n=>`Oublier ${n}`,
     blockDone: "Îlot dévoilé ! ▪",
     rulesTitle: "exp.lore.paris",
     rulesBody: [
@@ -1404,10 +1410,11 @@ function restoreAssisted(){
   }
   saveAssisted();
 }
+const lastStreet = ei => revList.every(k=>(nameGroup[ei]||[ei]).includes(k));   // never remove it: nowhere left to explore from
 function fadeStreet(item){
   if(!assisted.has(item.ei)||daily) return;
-  const ei=item.ei, g=nameGroup[ei]||[ei];
-  if(revList.every(k=>g.includes(k))){ scheduleFade(ei,SRS_BASE); return; }   // never fade the last street: nowhere left to explore from
+  const ei=item.ei;
+  if(lastStreet(ei)){ scheduleFade(ei,SRS_BASE); return; }
   clearAssisted(ei); rebuildWithout(ei);
   toast(t("faded"),()=>goToFaded(ei),6500);
 }
@@ -1657,10 +1664,6 @@ function toggleDebug(){
   debug = !debug;
   updateTitle();
   if (!debug){ hoverFace = -1; }
-  if (map){
-    if (debug) map.on("contextmenu", onMapContextMenu);
-    else map.off("contextmenu", onMapContextMenu);
-  }
   const ep = document.getElementById("edgepanel");
   ep.style.display = debug ? "block" : "none";
   if (debug) buildEdgePanel();
@@ -1745,18 +1748,24 @@ function rebuildWithout(ei, resetCelebrations=false){
   }
   fogDirty=true; save(); updateStats(true); draw();
 }
-function debugUnreveal(ei){
-  setDebugHidden(ei, true);
-  clearAssisted(ei); streak=0; rebuildWithout(ei,true);
+function forgetStreet(ei){                          // stays hidden, even from room history, until you type it again
+  setDebugHidden(ei, true); clearAssisted(ei);
+  delete srs.reps[EDGES[ei].n]; saveSrs();
+  streak=0; rebuildWithout(ei,true);
   flash("− " + EDGES[ei].n, true);
 }
-function onMapContextMenu(e){
-  if (!debug || (daily && dailyEnded)) return;
+const ctxMenu = document.getElementById("ctxMenu");
+document.addEventListener("pointerdown", e=>{ if (!ctxMenu.contains(e.target)) ctxMenu.style.display="none"; });
+function onMapContextMenu(e){                       // right-click / long-press a revealed street: menu to forget it (debug: instantly)
   if (e.originalEvent) L.DomEvent.preventDefault(e.originalEvent);
   const ei = edgeAt(e.containerPoint.x, e.containerPoint.y);
-  if (ei < 0) return;
-  if (!revEdge[ei]){ flash(t("noMatch"), false); return; }
-  debugUnreveal(ei);
+  if (daily || ei < 0 || !revEdge[ei] || lastStreet(ei)) return;
+  if (debug){ forgetStreet(ei); return; }
+  ctxMenu.innerHTML = `<button>${escHtml(t("forget")(EDGES[ei].n))}</button>`;
+  ctxMenu.firstChild.onclick = ()=>{ ctxMenu.style.display="none"; forgetStreet(ei); };
+  ctxMenu.style.display = "block";
+  ctxMenu.style.left = Math.min(e.originalEvent.clientX, innerWidth-ctxMenu.offsetWidth-8)+"px";
+  ctxMenu.style.top = Math.min(e.originalEvent.clientY, innerHeight-ctxMenu.offsetHeight-8)+"px";
 }
 function onMapClick(e){
   if (daily && dailyEnded) return;
@@ -1831,7 +1840,8 @@ function begin(lat, lon){
   map.on("zoomstart", ()=>{ dragging=true; });
   map.on("zoomend", ()=>{ dragging=false; fogDirty=true; draw(); });
   map.on("click", onMapClick);
-  if (debug) map.on("contextmenu", onMapContextMenu);
+  map.on("contextmenu", onMapContextMenu);
+  map.on("movestart", ()=> ctxMenu.style.display="none");
   map.on("mousemove", onMouseMove);
   map.on("mouseout", ()=>{ if(hoverEdge>=0||hoverFace>=0||hoverPlaque>=0||hoverSucette>=0){ hoverEdge=-1; hoverFace=-1; hoverPlaque=-1; hoverSucette=-1; hoverXY=null; hideTip(); draw(); updateDebugPanel(); } });
   map.on("resize", ()=>{ resize(); draw(); if(follow) fitRevealed(); });   // fires when the map container changes size (mobile URL bar, rotate)
@@ -2287,7 +2297,7 @@ arrEl.addEventListener("mouseover", e=>{           // hovering a row outlines it
   if (changed){ hoverArea = next; draw(); }
 });
 arrEl.addEventListener("mouseleave", ()=>{ if (hoverArea){ hoverArea = null; draw(); } });
-window.addEventListener("keydown", e=>{ if(e.key==="Escape" && !modalLocked) closeModal(); });
+window.addEventListener("keydown", e=>{ if(e.key==="Escape"){ ctxMenu.style.display="none"; if(!modalLocked) closeModal(); } });
 
 function boot(){
   applyLang();
