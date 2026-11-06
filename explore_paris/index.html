@@ -302,7 +302,7 @@ const I18N = {
     learnTitle: "Which street is this?", learnInput: "Type the street name…", learnTry: "Try",
     learnIdk: "I don't know", learnIdkAgain: "Still don't know", learnShow: "Show me on the map",
     learnWrong: "Not quite — try again or ask for a hint.", faded: "A street faded from memory", fadedGo: "Go to the faded street",
-    srs: "Spaced repetition", srsOn: "Spaced repetition on: streets fade, and stay longer each time you recall them", srsOff: "Spaced repetition off",
+    srs: "Spaced repetition", srsOn: "Spaced repetition on: streets you find now fade, and stay longer each time you recall them", srsOff: "Spaced repetition off",
     blockDone: "Block cleared! ▪",
     rulesTitle: "exp.lore.paris",
     rulesBody: [
@@ -353,7 +353,7 @@ const I18N = {
     learnTitle: "Quelle est cette rue ?", learnInput: "Tapez le nom de la rue…", learnTry: "Essayer",
     learnIdk: "Je ne sais pas", learnIdkAgain: "Toujours pas", learnShow: "Voir sur la carte",
     learnWrong: "Pas tout à fait — réessayez ou demandez un indice.", faded: "Une rue s'est effacée de votre mémoire", fadedGo: "Aller à la rue effacée",
-    srs: "Répétition espacée", srsOn: "Répétition espacée activée : les rues s'effacent, et restent plus longtemps à chaque rappel", srsOff: "Répétition espacée désactivée",
+    srs: "Répétition espacée", srsOn: "Répétition espacée activée : les rues trouvées s'effacent, et restent plus longtemps à chaque rappel", srsOff: "Répétition espacée désactivée",
     blockDone: "Îlot dévoilé ! ▪",
     rulesTitle: "exp.lore.paris",
     rulesBody: [
@@ -436,7 +436,7 @@ const debugHidden = new Set();
 const assisted = new Map();                     // every segment in a temporary street -> shared {ei,due,timer}
 let learningEi = -1, assisting = false;
 let daily = false;                               // daily-mode flag (no persistence)
-const SRS_KEY = "paris-srs", SRS_BASE = 6e4;      // spaced repetition: a street at recall level r fades after 1min × 3^r
+const SRS_KEY = "paris-srs", SRS_BASE = 6e4;      // spaced repetition: streets found in this mode fade after 1min × 3^level; others are permanent
 let srs = { on:false, reps:{} };                 // reps: street name -> recall level
 try { srs = JSON.parse(localStorage.getItem(SRS_KEY)) || srs; } catch(e){}
 // signature of the current dataset: changes whenever edges are added/removed/renamed/reordered —
@@ -1377,7 +1377,7 @@ function finishLearning(hints){
   const ei=learningEi; if(ei<0) return;
   learningEi=-1; closeModal(); assisting=true; const found=reveal(ei); assisting=false;
   if(!found) return;
-  if(!daily) srs.on ? srsReview([EDGES[ei].n], !hints) : scheduleFade(ei,LEARN_DELAYS[hints]);
+  if(!daily) srs.on ? srsReview([ei], !hints) : scheduleFade(ei,LEARN_DELAYS[hints]);
   streak=0; growViewToEdge(ei); updateStats(); checkMilestones();
   anim.push({type:"learn",ei,t:0}); if(!animRunning){ animRunning=true; requestAnimationFrame(animLoop); }
   draw(); flash(t("ok")(EDGES[ei].n),true,4000); if(daily) checkDailyWin();
@@ -1415,17 +1415,16 @@ function goToFaded(ei){
   follow=false; const bb=edgeBounds(ei); tweenTo(bb.getCenter(),Math.min(zoomForBounds(bb,140,17),17),650);
   anim.push({type:"forgot",ei,t:0}); if(!animRunning){ animRunning=true; requestAnimationFrame(animLoop); }
 }
-function srsReview(names, recalled){               // bump (or reset) each street's level, then schedule every unscheduled revealed street
-  for(const nm of names) srs.reps[nm]=recalled?(srs.reps[nm]??0)+1:0;
-  if(srs.on) for(const ei of revList) if(!assisted.has(ei)) setAssisted(ei,Date.now()+SRS_BASE*3**(srs.reps[EDGES[ei].n]??1));
-  try { localStorage.setItem(SRS_KEY,JSON.stringify(srs)); } catch(e){}
-  saveAssisted();
+function saveSrs(){ try { localStorage.setItem(SRS_KEY,JSON.stringify(srs)); } catch(e){} }
+function srsReview(ids, recalled){                 // schedule just-revealed streets to fade: each recall triples the delay, help resets it
+  for(const nm of new Set(ids.map(ei=>EDGES[ei].n))) srs.reps[nm]=recalled?(srs.reps[nm]??0)+1:0;
+  for(const ei of ids) setAssisted(ei,Date.now()+SRS_BASE*3**srs.reps[EDGES[ei].n]);
+  saveSrs(); saveAssisted();
 }
 function toggleSrs(){
   if(daily) return;
   srs.on=!srs.on; document.getElementById("srsBtn").classList.toggle("on",srs.on);
-  if(!srs.on) for(const ei of [...assisted.keys()]) clearAssisted(ei,false);
-  srsReview([]); flash(t(srs.on?"srsOn":"srsOff"),true,3000);
+  saveSrs(); flash(t(srs.on?"srsOn":"srsOff"),true,3000);
 }
 let lastPctMilestone = 0, celebratedArr = new Set(), celebratedQua = new Set(), celebratedRive = new Set();
 // bigger area (more total km) -> bigger confetti burst, quartier ~70 ... whole bank ~500
@@ -1548,7 +1547,7 @@ function submitGuess(){
       const merged = map.getBounds().extend(bounds);
       tweenTo(merged.getCenter(), zoomForBounds(merged, 80, map.getZoom()), 500);
     }
-    if (srs.on && !daily) srsReview(byName.keys(), true);
+    if (srs.on && !daily) srsReview(newIds, true);
     streak++; bestStreak=Math.max(bestStreak,streak);
     updateStats(); flourishStreak(); checkMilestones(); draw();
     if (streak>=5 && streak%5===0){ lines[0] += `  🔥 ${streak}!`; toast(`🔥 ${streak} ${t("streak")}!`); }
@@ -2172,7 +2171,7 @@ function showFeedback(){
 // ---- multiplayer: always in a room (sync.js). Bottom-right shows your room code; the box below
 //      merges another room by joining it (your progress travels with you — gossip union). --------
 function applyRemoteFound(v, live){                // v = {n, la, lo, by, c}; live=false while replaying history
-  if (daily || srs.on) return;                    // daily and spaced repetition are solo: room history would revive faded streets
+  if (daily) return;                              // daily is solo: never take remote reveals onto its board
   const ei = resolveStreet(v.n, v.la, v.lo);
   if (ei < 0) return;                             // unknown here
   if (debugHidden.has(ei)) return;                // local debug overrides win over grow-only room history
