@@ -26,8 +26,8 @@
 <h1>Paris street match tester</h1>
 <input id="q" placeholder="type a guess…" autocomplete="off" autofocus>
 <div class="note">Ranks <b id="n">…</b> streets in the whole database by edit distance (<code>lev</code>). The query keeps its
-  prefixes (<code>core(q,false)</code>); each street is keyed <b>both with and without</b> its prefix (<code>core(name)</code>
-  and <code>core(name,false)</code>) and scored by its best key — as the game does, so <code>porte jaune</code> and
+  prefixes (<code>core(q)</code>); each street is keyed at <b>every stage</b> of peeling its prefix (<code>keys(name)</code>)
+  and scored by its best key — as the game does, so <code>porte jaune</code> and
   <code>rue de la porte jaune</code> both reach <i>Rue de la Porte Jaune</i>. Game accepts distance ≤ 1 (green) among
   <i>reachable</i> streets; 2 is a near-miss (amber). Here we search the <b>entire</b> database, ignoring reachability.</div>
 <div id="summary"></div>
@@ -37,9 +37,9 @@
 <script src="paris.js"></script>
 <script src="match.js"></script>
 <script>
-// core()/lev()/STRIP come from match.js (shared with the game)
+// core()/keys()/lev() come from match.js (shared with the game)
 const EDGES = window.PARIS.edges;
-const KEYS = EDGES.map(e=>[...new Set([core(e.n), core(e.n,false)])].filter(k=>k));  // each name keyed with AND without its prefix
+const KEYS = EDGES.map(e=>keys(e.n));   // each name keyed at every stage of peeling its prefix (see keys)
 // one row per distinct name (edges split many streets into pieces sharing a name)
 const seen = new Set(); const UNIQ = [];
 EDGES.forEach((e,i)=>{ if(!seen.has(e.n)){ seen.add(e.n); UNIQ.push(i); } });
@@ -48,7 +48,7 @@ document.getElementById("n").textContent = UNIQ.length + " names / " + EDGES.len
 const q = document.getElementById("q"), rows = document.getElementById("rows"), summ = document.getElementById("summary");
 function esc(s){ return s.replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c])); }
 function run(){
-  const qv = core(q.value, false);                            // query keeps its prefixes, single form
+  const qv = core(q.value);                            // query keeps its prefixes, single form
   const md = i => Math.min(...KEYS[i].map(k => lev(qv, k)));   // best distance across the edge's keys
   summ.innerHTML = q.value.trim() ? `core(query) = <b>${esc(qv) || "∅"}</b>` : "";
   if (qv.length < 2){ rows.innerHTML = ""; return; }

@@ -396,7 +396,7 @@ const t = k => I18N[LANG][k];
 function setLang(l){ LANG=l; localStorage.setItem("paris-lang", l); applyLang(); }
 
 // ---- fuzzy matching (core/lev/STRIP live in match.js) ---------------------
-const KEYS = EDGES.map(e=>[...new Set([core(e.n), core(e.n,false)])].filter(k=>k));  // each name keyed with AND without its prefix
+const KEYS = EDGES.map(e=>keys(e.n));   // each name keyed at every stage of peeling its prefix (see keys)
 
 // ---- game state -----------------------------------------------------------
 const FACES = D.faces || [];
@@ -520,7 +520,7 @@ function areaPolys(key, gi){                        // exact baked boundary (arr
   const hull = areaHull(key, gi); return hull.length>=3 ? [hull] : [];
 }
 const edgesByName = new Map();                   // normalized name (core, prefix kept) -> edge indices
-EDGES.forEach((e,i)=>{ const k=core(e.n,false); const a=edgesByName.get(k); if(a) a.push(i); else edgesByName.set(k,[i]); });
+EDGES.forEach((e,i)=>{ const k=core(e.n); const a=edgesByName.get(k); if(a) a.push(i); else edgesByName.set(k,[i]); });
 // Same-name merge: sections whose normalized name matches (so "…République"/"…Republique" unify) AND within 250m are one street, revealed
 // together (a street split by a gap). Farther same-name streets stay separate — e.g. the two
 // unrelated "Rue Michel-Ange" sit 3km apart. nameGroup[ei] = every edge merged with ei (incl. itself).
@@ -549,7 +549,7 @@ const nameGroup = new Array(EDGES.length).fill(null);
 })();
 // re-resolve a saved [name, lat, lon] to the current best-matching edge (nearest same-named segment)
 function resolveStreet(name, lat, lon){
-  const c = edgesByName.get(core(name, false)); if (!c) return -1;
+  const c = edgesByName.get(core(name)); if (!c) return -1;
   if (c.length===1) return c[0];
   let best=-1, bd=Infinity;
   for (const ei of c){ const p=edgePoint(ei), d=(p[0]-lat)**2+(p[1]-lon)**2; if(d<bd){bd=d;best=ei;} }
@@ -1345,11 +1345,11 @@ const WORD_RX = /[\p{L}\p{N}]+/gu;
 let learningStage = 0;
 function initialsMask(name){ return name.replace(WORD_RX,w=>[...w].map((c,i)=>i?"_":c).join("")); }
 function halfMask(name){
-  const words=[...name.matchAll(WORD_RX)], key=w=>core(w,false); let body=0;
+  const words=[...name.matchAll(WORD_RX)]; let body=0;
   if(words.length){
-    if(words[1] && TYPE.has(key(words[0][0])+" "+key(words[1][0]))) body=2;
-    else if(TYPE.has(key(words[0][0]))) body=1;
-    while(words[body] && CONN.has(key(words[body][0]))) body++;
+    if(words[1] && TYPE.has(core(words[0][0])+" "+core(words[1][0]))) body=2;
+    else if(TYPE.has(core(words[0][0]))) body=1;
+    while(words[body] && CONN.has(core(words[body][0]))) body++;
   }
   const start=words[body]?words[body].index:0;
   let left=Math.ceil([...name.slice(start).matchAll(/[\p{L}\p{N}]/gu)].length/2);
@@ -1365,7 +1365,7 @@ function showLearning(ei){
   overlay.classList.add("learn");
   const form=document.getElementById("learnForm"), input=document.getElementById("learnInput"), idk=document.getElementById("learnIdk");
   form.onsubmit=e=>{
-    e.preventDefault(); const q=core(input.value.trim(),false);
+    e.preventDefault(); const q=core(input.value.trim());
     if(q && Math.min(...KEYS[ei].map(k=>lev(q,k)))<=1) finishLearning(learningStage);
     else { document.getElementById("learnError").textContent=t("learnWrong"); input.select(); }
   };
@@ -1508,9 +1508,9 @@ function submitGuess(){
   const raw = inp.value.trim();
   inp.value="";
   if (raw){ history.push(raw); histPos = history.length; }   // shell-style: ↑ recalls last typed
-  // the query keeps its prefixes; each street is keyed both with and without one (see KEYS), so
+  // the query keeps its prefixes; each street is keyed both with and without one (see keys), so
   // "porte jaune" and "rue de la porte jaune" both reach "Rue de la Porte Jaune"
-  const q = core(raw, false);
+  const q = core(raw);
   if (q.length < 2) return;
   const md = ei => Math.min(...KEYS[ei].map(k => lev(q, k)));   // best edit distance across the edge's keys
   const tol = 1;                               // accept the exact name plus or minus one typo
