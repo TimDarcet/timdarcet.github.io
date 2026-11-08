@@ -1353,7 +1353,7 @@ function halfMask(name){
   }
   const start=words[body]?words[body].index:0;
   let left=Math.ceil([...name.slice(start).matchAll(/[\p{L}\p{N}]/gu)].length/2);
-  return name.replace(WORD_RX,(w,at)=>at<start?w:[...w].map(c=>left-- > 0?c:"_").join(""));
+  return name.replace(WORD_RX,(w,at)=>at<start?w:[...w].map((c,i)=>left-- > 0 || !i?c:"_").join(""));   // keep initials from step 1
 }
 function showLearning(ei){
   if(ei==null || revEdge[ei] || (daily&&dailyEnded)) return;
