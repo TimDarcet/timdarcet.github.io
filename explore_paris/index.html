@@ -419,21 +419,9 @@ const anim = [];                                // active reveal draw-on / fill 
 const edgeColor = new Array(EDGES.length).fill(null);
 let applyingRemote = false, roster = {}, remoteColor = null;
 
-// ---- totals + progress, overall and per arrondissement --------------------
+// ---- totals ---------------------------------------------------------------
 const ARR = D.arr || [];
 const TOTAL_AREA = FACES.reduce((s,f)=>s+(f.m||0), 0);     // m²
-// per-arr denominators; index ARR.length is the "unassigned / outside" bucket
-const NB = ARR.length;
-const arrTotKm = new Float64Array(NB+1), arrTotArea = new Float64Array(NB+1);
-const arrTotN = new Int32Array(NB+1), arrCntN = new Int32Array(NB+1);
-const arrKm = new Float64Array(NB+1), arrArea = new Float64Array(NB+1);
-const ai = e => (e.a>=0 && e.a<NB) ? e.a : NB;
-EDGES.forEach(e=>{ const k=ai(e); arrTotKm[k]+=e.k; arrTotN[k]++; });
-FACES.forEach(f=>{ const k=(f.a>=0&&f.a<NB)?f.a:NB; arrTotArea[k]+=f.m||0; });
-// per-quartier revealed km, for the "neighborhood complete" celebration (quartier = neighborhood)
-const NQ = (D.qua || []).length;
-const quaTotKm = new Float64Array(NQ), quaKm = new Float64Array(NQ);
-if (NQ) EDGES.forEach(e=>{ if (e.q>=0 && e.q<NQ) quaTotKm[e.q]+=e.k; });
 
 const SAVE_KEY = "paris-streets-progress";
 const DEBUG_HIDE_KEY = "paris-debug-hidden";
@@ -450,9 +438,10 @@ try { srs = JSON.parse(localStorage.getItem(SRS_KEY)) || srs; } catch(e){}
 const DATA_VERSION = (()=>{ let h=EDGES.length; for(const e of EDGES) for(let i=0;i<e.n.length;i++) h=(h*31+e.n.charCodeAt(i))|0; return h; })();
 const edgePoint = ei => { const p=EDGES[ei].p[0]; return p[(p.length/2)|0]; };   // representative point
 // ---- area granularities for the progress panel: arrondissement / quartier / rive ----------------
-// Rive is derived: every arrondissement sits entirely on one bank except the two islands, which we
-// detect geometrically (rings lifted from the IGN Seine water surface). Quartier is optional data
-// (each edge's `q` index + D.qua labels), baked by build_areas.py — its tab appears only when present.
+// Progress is revealed block (face) area. Rive is derived: every arrondissement sits entirely on one bank
+// except the two islands, which we detect geometrically (rings lifted from the IGN Seine water surface).
+// Quartier is optional data (each face's `q` index + D.qua labels), carried in paris.js by build.py — its tab
+// appears only when present.
 const ISLANDS = [                                // Île de la Cité, Île Saint-Louis (buffered rings, [lat,lon])
   [[48.8578,2.33903],[48.85518,2.35096],[48.85148,2.35294],[48.85469,2.34309]],
   [[48.85315,2.3528],[48.85407,2.35323],[48.8518,2.35992],[48.84932,2.36064],[48.85133,2.35385]],
@@ -466,34 +455,33 @@ function pointInRing(lat, lon, ring){            // ray-casting point-in-polygon
   }
   return inside;
 }
-function riveOf(ei){                              // 0 = right bank, 1 = left bank, 2 = islands, -1 = unassigned
-  const a = EDGES[ei].a; if (a<0 || a>=ARR.length) return -1;
-  const p = edgePoint(ei);
-  for (const r of ISLANDS) if (pointInRing(p[0], p[1], r)) return 2;
+function riveOf(fi){                              // 0 = right bank, 1 = left bank, 2 = islands, -1 = unassigned
+  const a = FACES[fi].a; if (a<0 || a>=ARR.length) return -1;
+  const ring = FACES[fi].p[0], lat = ring.reduce((s,p)=>s+p[0],0)/ring.length, lon = ring.reduce((s,p)=>s+p[1],0)/ring.length;
+  for (const r of ISLANDS) if (pointInRing(lat, lon, r)) return 2;
   return RIVE_GAUCHE.has(parseInt(ARR[a],10)) ? 1 : 0;
 }
-// per-bank revealed km, for the biggest completion celebration (a whole rive is the largest area)
-const rivTotKm = new Float64Array(3), rivKm = new Float64Array(3);
-EDGES.forEach((e,i)=>{ const r=riveOf(i); if (r>=0) rivTotKm[r]+=e.k; });
-const hasQuartiers = () => Array.isArray(D.qua) && D.qua.length > 0 && EDGES[0] && EDGES[0].q !== undefined;
+const hasQuartiers = () => Array.isArray(D.qua) && D.qua.length > 0 && FACES[0] && FACES[0].q !== undefined;
 // street type = first word of the name ("Rue", "Avenue"…); types with <30 sections are pooled into "other"
 const TYPES = (()=>{ const n={}; EDGES.forEach(e=>{ const w=e.n.split(" ")[0]; n[w]=(n[w]||0)+1; }); return Object.keys(n).filter(w=>n[w]>=30); })();
 let granIdx = 0;                                  // selected granularity (index into granList())
+// group(i) maps a face index (or, for street types, which have no area, an edge index) to its row
 function granList(){                              // built fresh so labels track the language; order: arr, quartier, rive, type
-  const g = [{ key:"arr", tab:t("gArr"), labels: ARR, group: ei => { const a=EDGES[ei].a; return (a>=0&&a<ARR.length)?a:-1; } }];
-  if (hasQuartiers()) g.push({ key:"qua", tab:t("gQua"), labels: D.qua, group: ei => { const q=EDGES[ei].q; return (q>=0&&q<D.qua.length)?q:-1; } });
+  const g = [{ key:"arr", tab:t("gArr"), labels: ARR, group: fi => FACES[fi].a }];
+  if (hasQuartiers()) g.push({ key:"qua", tab:t("gQua"), labels: D.qua, group: fi => FACES[fi].q });
   g.push({ key:"riv", tab:t("gRive"), labels: [t("riveDroite"), t("riveGauche"), t("iles")], group: riveOf });
-  g.push({ key:"typ", tab:t("gType"), labels: [...TYPES, t("gOther")], group: ei => { const i=TYPES.indexOf(EDGES[ei].n.split(" ")[0]); return i>=0?i:TYPES.length; } });
+  g.push({ key:"typ", tab:t("gType"), labels: [...TYPES, t("gOther")], km: true, group: ei => { const i=TYPES.indexOf(EDGES[ei].n.split(" ")[0]); return i>=0?i:TYPES.length; } });
   return g;
 }
-const granTotCache = {};                          // per-granularity total km per group (denominators), computed once
-function granTotals(gran){
-  if (granTotCache[gran.key]) return granTotCache[gran.key];
+function granSum(gran, ids){                      // per-group m² of the given faces (km of edges for street types)
   const tot = new Float64Array(gran.labels.length);
-  for (let ei=0; ei<EDGES.length; ei++){ const gi=gran.group(ei); if (gi>=0 && gi<tot.length) tot[gi]+=EDGES[ei].k; }
-  return granTotCache[gran.key] = tot;
+  for (const i of ids){ const gi=gran.group(i); if (gi>=0 && gi<tot.length) tot[gi] += gran.km ? EDGES[i].k : FACES[i].m||0; }
+  return tot;
 }
-// hovering a progress row outlines its region: the convex hull of that group's streets (cached per
+const granTotCache = {};                          // per-granularity denominators, computed once
+const granTotals = gran => granTotCache[gran.key] ||= granSum(gran, (gran.km ? EDGES : FACES).keys());
+const granRevealed = gran => granSum(gran, gran.km ? revList : faceList);
+// hovering a progress row outlines its region: the convex hull of that group's blocks (cached per
 // group). A hull blob shows WHERE the area is without exposing individual unrevealed streets.
 let hoverArea = null;                             // {key, gi} of the hovered row, or null
 const hullCache = {};
@@ -509,7 +497,7 @@ function convexHull(pts){                          // monotone chain; pts and re
 function areaHull(key, gi){
   const ck = key+":"+gi; if (hullCache[ck]) return hullCache[ck];
   const gran = granList().find(g=>g.key===key); if (!gran) return hullCache[ck]=[];
-  const pts=[]; for (let ei=0; ei<EDGES.length; ei++) if (gran.group(ei)===gi){ const p=edgePoint(ei); pts.push([p[0],p[1]]); }
+  const pts=[]; for (let fi=0; fi<FACES.length; fi++) if (gran.group(fi)===gi) pts.push(...FACES[fi].p[0]);
   return hullCache[ck] = convexHull(pts);
 }
 function areaPolys(key, gi){                        // exact baked boundary (array of [lat,lon] rings); hull if absent
@@ -549,10 +537,33 @@ const nameGroup = new Array(EDGES.length).fill(null);
 })();
 // re-resolve a saved [name, lat, lon] to the current best-matching edge (nearest same-named segment)
 function resolveStreet(name, lat, lon){
-  const c = edgesByName.get(core(name)); if (!c) return -1;
+  const c = edgesByName.get(core(name)); if (!c) return renamedStreet(name, lat, lon);
   if (c.length===1) return c[0];
   let best=-1, bd=Infinity;
   for (const ei of c){ const p=edgePoint(ei), d=(p[0]-lat)**2+(p[1]-lon)**2; if(d<bd){bd=d;best=ei;} }
+  return best;
+}
+// a name the data no longer has (respelled/renamed upstream, e.g. "Liniers" -> "Linières"): the closest-named
+// street passing within 40 m of the saved point. Accepted within 2 edits, or a quarter of the letters when the
+// street type is unchanged ("Port de Javel Bas" -> "Port de Javel", but not "Porte Pouchet" -> "Rue Pouchet").
+let edgeBox = null;                               // per-edge [minLat, maxLat, minLon, maxLon], built on first use
+function renamedStreet(name, lat, lon){
+  const q = core(name), type = s => core(s.split(" ")[0]), kx = Math.cos(lat*Math.PI/180)*111320, ky = 111320;
+  edgeBox ||= EDGES.map(e=>{ const f=e.p.flat(), la=f.map(p=>p[0]), lo=f.map(p=>p[1]);
+    return [Math.min(...la), Math.max(...la), Math.min(...lo), Math.max(...lo)]; });
+  const near = ([a0,b0],[a1,b1]) => {             // segment within 40 m of (lat,lon)?
+    const ax=(b0-lon)*kx, ay=(a0-lat)*ky, dx=(b1-b0)*kx, dy=(a1-a0)*ky;
+    const t=Math.max(0, Math.min(1, -(ax*dx+ay*dy)/(dx*dx+dy*dy || 1)));
+    return (ax+t*dx)**2 + (ay+t*dy)**2 < 1600;
+  };
+  let best=-1, bd=Infinity;
+  EDGES.forEach((e,ei)=>{
+    const [a0,a1,b0,b1] = edgeBox[ei];
+    if (lat < a0-4e-4 || lat > a1+4e-4 || lon < b0-6e-4 || lon > b1+6e-4) return;   // ~45 m margin
+    if (!e.p.some(pl=>pl.some((p,k)=> k && near(pl[k-1], p)))) return;
+    const d=lev(q, core(e.n));
+    if (d<bd && (d<=2 || (d<=q.length>>2 && type(name)===type(e.n)))){ bd=d; best=ei; }
+  });
   return best;
 }
 function persistDebugHidden(){
@@ -647,8 +658,7 @@ function checkFaces(ei, replay){                  // reveal any block whose boun
     if (revFace[fi]) continue;
     if (FACES[fi].e.every(e => revEdge[e])){
       revFace[fi] = 1; faceList.push(fi); filled++;
-      const m = FACES[fi].m||0; revArea += m;
-      const k=(FACES[fi].a>=0&&FACES[fi].a<NB)?FACES[fi].a:NB; arrArea[k]+=m;
+      revArea += FACES[fi].m||0;
       if (!replay) anim.push({type:"face", fi, t:0});
     }
   }
@@ -661,9 +671,6 @@ function reveal(ei, replay){
   }
   if (revEdge[ei]) return false;
   revEdge[ei] = 1; revList.push(ei); revEdgeCount++; revKm += EDGES[ei].k;
-  const k = ai(EDGES[ei]); arrKm[k]+=EDGES[ei].k; arrCntN[k]++;
-  const eq = EDGES[ei].q; if (eq>=0 && eq<quaKm.length) quaKm[eq]+=EDGES[ei].k;
-  const er = riveOf(ei); if (er>=0) rivKm[er]+=EDGES[ei].k;
   EDGES[ei].i.forEach(ni => revNode[ni] = 1);
   // update frontier: this edge's endpoints may now be revealed; any node that just
   // lost its last unrevealed edge drops out. Only touch nodes adjacent to this edge.
@@ -732,15 +739,18 @@ function precompute(){
   });
   const n = new Float64Array(NODES.length*2);
   for (let i=0;i<NODES.length;i++){ const q=map.project([NODES[i][0],NODES[i][1]], REFZ); n[2*i]=q.x; n[2*i+1]=q.y; }
-  const f = FACES.map((fc, fi)=>{
+  const f = FACES.map((fc, fi)=>{                   // rings: [outer, holes...]; the outer ring bounds them all
     let mnx=1e18,mny=1e18,mxx=-1e18,mxy=-1e18;
-    const a = new Float64Array(fc.p.length*2);
-    for (let k=0;k<fc.p.length;k++){
-      const q = map.project([fc.p[k][0], fc.p[k][1]], REFZ);
-      a[2*k]=q.x; a[2*k+1]=q.y;
-      if(q.x<mnx)mnx=q.x; if(q.x>mxx)mxx=q.x; if(q.y<mny)mny=q.y; if(q.y>mxy)mxy=q.y;
-    }
-    fb[fi]=[mnx,mny,mxx,mxy]; return a;
+    const rings = fc.p.map(ring=>{
+      const a = new Float64Array(ring.length*2);
+      for (let k=0;k<ring.length;k++){
+        const q = map.project([ring[k][0], ring[k][1]], REFZ);
+        a[2*k]=q.x; a[2*k+1]=q.y;
+        if(q.x<mnx)mnx=q.x; if(q.x>mxx)mxx=q.x; if(q.y<mny)mny=q.y; if(q.y>mxy)mxy=q.y;
+      }
+      return a;
+    });
+    fb[fi]=[mnx,mny,mxx,mxy]; return rings;
   });
   const pl = new Float64Array(PLAQUES.length*2);
   for (let i=0;i<PLAQUES.length;i++){ const q=map.project([PLAQUES[i].la, PLAQUES[i].lo], REFZ); pl[2*i]=q.x; pl[2*i+1]=q.y; }
@@ -796,12 +806,15 @@ function faceAt(px, py){
   for (let fi=0; fi<FACES.length; fi++){
     const bb = PX.fb[fi];
     if (px<bb[0]*S+Tx || px>bb[2]*S+Tx || py<bb[1]*S+Ty || py>bb[3]*S+Ty) continue;  // bbox cull
-    const a = PX.f[fi]; const n = a.length/2; let inside = false;
-    for (let i=0,j=n-1; i<n; j=i++){
-      const yi=a[2*i+1]*S+Ty, yj=a[2*j+1]*S+Ty;
-      if ((yi>py)!==(yj>py)){
-        const xi=a[2*i]*S+Tx, xj=a[2*j]*S+Tx;
-        if (px < (xj-xi)*(py-yi)/(yj-yi)+xi) inside=!inside;
+    let inside = false;                             // even-odd across all rings, so holes are outside
+    for (const a of PX.f[fi]){
+      const n = a.length/2;
+      for (let i=0,j=n-1; i<n; j=i++){
+        const yi=a[2*i+1]*S+Ty, yj=a[2*j+1]*S+Ty;
+        if ((yi>py)!==(yj>py)){
+          const xi=a[2*i]*S+Tx, xj=a[2*j]*S+Tx;
+          if (px < (xj-xi)*(py-yi)/(yj-yi)+xi) inside=!inside;
+        }
       }
     }
     if (inside){ const ar=(bb[2]-bb[0])*(bb[3]-bb[1]); if(ar<bestArea){ bestArea=ar; best=fi; } }
@@ -915,10 +928,12 @@ function strokePathsG(g, ei){                      // add this edge's polylines 
     for (let k=1;k<a.length/2;k++) g.lineTo(a[2*k]*S+Tx, a[2*k+1]*S+Ty);
   }
 }
-function tracePolyG(g, a){                          // add a face polygon to context g's path
-  g.moveTo(a[0]*S+Tx, a[1]*S+Ty);
-  for (let k=1;k<a.length/2;k++) g.lineTo(a[2*k]*S+Tx, a[2*k+1]*S+Ty);
-  g.closePath();
+function tracePolyG(g, rings){                      // add a face's rings to context g's path (fill "evenodd" for holes)
+  for (const a of rings){
+    g.moveTo(a[0]*S+Tx, a[1]*S+Ty);
+    for (let k=1;k<a.length/2;k++) g.lineTo(a[2*k]*S+Tx, a[2*k+1]*S+Ty);
+    g.closePath();
+  }
 }
 function strokePaths(ei){ strokePathsG(ctx, ei); } // overlays draw on the main context
 function tracePoly(a){ tracePolyG(ctx, a); }
@@ -955,7 +970,7 @@ function renderFog(){
   e.setTransform(DPR,0,0,DPR,0,0); e.globalCompositeOperation="source-over"; e.clearRect(0,0,W,H);
   e.lineCap="round"; e.lineJoin="round"; e.filter = "none";
   e.fillStyle = "rgba(214,168,74,1)"; e.strokeStyle = "rgba(214,168,74,1)"; e.lineWidth = brush;
-  for (const fi of faceList) if (onScreen(PX.fb[fi])){ e.beginPath(); tracePolyG(e, PX.f[fi]); e.fill(); }
+  for (const fi of faceList) if (onScreen(PX.fb[fi])){ e.beginPath(); tracePolyG(e, PX.f[fi]); e.fill("evenodd"); }
   e.beginPath();
   for (const ei of revList) if (onScreen(PX.eb[ei])) strokePathsG(e, ei);
   e.stroke();
@@ -978,7 +993,7 @@ function renderFog(){
   // 4. faint warm tint on cleared blocks + revealed streets as ink
   for (const fi of faceList){
     if (!onScreen(PX.fb[fi])) continue;
-    g.beginPath(); tracePolyG(g, PX.f[fi]); g.fillStyle = "rgba(214,168,74,0.07)"; g.fill();
+    g.beginPath(); tracePolyG(g, PX.f[fi]); g.fillStyle = "rgba(214,168,74,0.07)"; g.fill("evenodd");
   }
   for (const ei of revList){
     if (!onScreen(PX.eb[ei])) continue;
@@ -1038,7 +1053,7 @@ function draw(){
       if (!onScreen(bb)) continue;
       ctx.save();
       ctx.beginPath(); tracePoly(poly);
-      ctx.fillStyle = `rgba(255,201,92,${0.5*(1-A.t)})`; ctx.fill();       // gold shimmer fading out
+      ctx.fillStyle = `rgba(255,201,92,${0.5*(1-A.t)})`; ctx.fill("evenodd");       // gold shimmer fading out
       ctx.strokeStyle = `rgba(255,214,120,${0.9*(1-A.t)})`; ctx.lineWidth = 2+4*(1-A.t); ctx.stroke();
       ctx.restore();
     } else if (A.type === "locate"){
@@ -1102,10 +1117,10 @@ function draw(){
     }
   }
 
-  // 4b. debug: highlight the reveal-area under the cursor + outline its bounding streets
+  // 4b. debug: highlight the reveal-area under the cursor + outline the streets it needs
   if (debug && hoverFace >= 0){
     ctx.beginPath(); tracePoly(PX.f[hoverFace]);
-    ctx.fillStyle = "rgba(124,58,237,0.28)"; ctx.fill();
+    ctx.fillStyle = "rgba(124,58,237,0.28)"; ctx.fill("evenodd");
     ctx.strokeStyle = "rgba(124,58,237,0.9)"; ctx.lineWidth = 2; ctx.stroke();
     for (const ei of FACES[hoverFace].e){          // green = revealed, red = still needed
       ctx.strokeStyle = revEdge[ei] ? "rgba(16,160,80,0.95)" : "rgba(230,40,60,0.95)";
@@ -1294,7 +1309,7 @@ function renderHistory(){
   }
   box.innerHTML = `<div class="ah">${t("recent")}</div>` + (rows.length
     ? rows.map(ei=>{
-        const lab = ARR[ai(EDGES[ei])] || "", nm = escHtml(EDGES[ei].n);
+        const lab = ARR[EDGES[ei].a] || "", nm = escHtml(EDGES[ei].n);
         return `<button class="hrow" data-ei="${ei}" title="${nm}">`+
                `<i class="hdot" style="background:${edgeColor[ei]||"#9fb2c9"}"></i>`+
                `<span class="hn">${nm}</span>`+
@@ -1303,13 +1318,11 @@ function renderHistory(){
       }).join("")
     : `<div class="hempty">${t("recentEmpty")}</div>`);
 }
-// area-progress panel: a granularity toggle (arr / quartier / rive) above bars sorted by % revealed km
+// area-progress panel: a granularity toggle (arr / quartier / rive / type) above bars sorted by % revealed area (km for types)
 function renderAreaStats(){
   const el = document.getElementById("arr");
   const grans = granList(); if (granIdx >= grans.length) granIdx = 0;
-  const gran = grans[granIdx], tot = granTotals(gran);
-  const rev = new Float64Array(gran.labels.length);
-  for (const ei of revList){ const gi=gran.group(ei); if (gi>=0 && gi<rev.length) rev[gi]+=EDGES[ei].k; }
+  const gran = grans[granIdx], tot = granTotals(gran), rev = granRevealed(gran);
   const rows = gran.labels.map((lab,k)=>({lab, gi:k, pct: tot[k]? rev[k]/tot[k] : 0, has: tot[k]>0}))
                   .filter(r=>r.has).sort((a,b)=> b.pct-a.pct);
   const tabs = grans.map((g,i)=>`<button class="gtab${i===granIdx?" active":""}" data-g="${i}">${g.tab}</button>`).join("");
@@ -1433,16 +1446,18 @@ function toggleSrs(){
   srs.on=!srs.on; document.getElementById("srsBtn").classList.toggle("on",srs.on);
   saveSrs(); flash(t(srs.on?"srsOn":"srsOff"),true,3000);
 }
-let lastPctMilestone = 0, celebratedArr = new Set(), celebratedQua = new Set(), celebratedRive = new Set();
-// bigger area (more total km) -> bigger confetti burst, quartier ~70 ... whole bank ~500
-function celebrateArea(label, totalKm){ toast(label); confetti(Math.round(Math.min(500, 40 + 13*Math.sqrt(totalKm)))); sound(3, 90000, true); }
+let lastPctMilestone = 0;
+const celebrated = { qua: new Set(), arr: new Set(), riv: new Set() };   // finished rows already toasted, smallest area kind first
+const doneRows = gran => { const tot=granTotals(gran), rev=granRevealed(gran); return gran.labels.map((_,k)=>k).filter(k=>tot[k]>0 && rev[k]/tot[k]>=0.999); };
+// bigger area -> bigger confetti burst, quartier ~100 ... whole bank ~500
+function celebrateArea(label, m2){ toast(label); confetti(Math.round(Math.min(500, 40 + 60*Math.sqrt(m2/1e6)))); sound(3, 90000, true); }
 // mark already-finished areas so a restored/loaded game doesn't re-celebrate them
 function areaBaselines(){
-  celebratedQua.clear(); for (let k=0;k<quaKm.length;k++) if (quaTotKm[k]>0 && quaKm[k]/quaTotKm[k]>=0.999) celebratedQua.add(k);
-  celebratedRive.clear(); for (let k=0;k<3;k++) if (rivTotKm[k]>0 && rivKm[k]/rivTotKm[k]>=0.999) celebratedRive.add(k);
+  lastPctMilestone = 100*revArea/TOTAL_AREA;
+  for (const g of granList()) if (celebrated[g.key]) celebrated[g.key] = new Set(doneRows(g));
 }
 function checkMilestones(){
-  const pct = 100*revEdgeCount/EDGES.length;
+  const pct = 100*revArea/TOTAL_AREA;
   for (const m of [1,5,10,25,50,75,90,100]){
     if (pct >= m && lastPctMilestone < m){
       lastPctMilestone = m;
@@ -1451,24 +1466,18 @@ function checkMilestones(){
       sound(2, 60000, true);
     }
   }
-  // area completions — burst scales with area size: quartier < arrondissement < whole bank
-  for (let k=0;k<quaKm.length;k++){                 // quartier (neighborhood)
-    if (!celebratedQua.has(k) && quaTotKm[k]>0 && quaKm[k]/quaTotKm[k] >= 0.999){
-      celebratedQua.add(k);
-      celebrateArea(LANG==="fr"?`Quartier ${D.qua[k]} terminé ! 🎉`:`${D.qua[k]} — neighborhood complete! 🎉`, quaTotKm[k]);
-    }
-  }
-  for (let k=0;k<NB;k++){                           // arrondissement
-    if (!celebratedArr.has(k) && arrTotKm[k]>0 && arrKm[k]/arrTotKm[k] >= 0.999){
-      celebratedArr.add(k);
-      celebrateArea(LANG==="fr"?`${ARR[k]}e arrondissement terminé ! 🎉`:`${ARR[k]}e arrondissement complete! 🎉`, arrTotKm[k]);
-    }
-  }
-  const rlab = [t("riveDroite"), t("riveGauche"), t("iles")];
-  for (let k=0;k<3;k++){                            // whole bank — the largest area, biggest burst
-    if (!celebratedRive.has(k) && rivTotKm[k]>0 && rivKm[k]/rivTotKm[k] >= 0.999){
-      celebratedRive.add(k);
-      celebrateArea(LANG==="fr"?`${rlab[k]} : 100 % ! 🎉🎉`:`${rlab[k]} 100% complete! 🎉🎉`, rivTotKm[k]);
+  // area completions, quartier < arrondissement < whole bank, so the biggest one's toast stays up
+  const fr = LANG==="fr", grans = granList();
+  for (const key in celebrated){
+    const g = grans.find(g=>g.key===key); if (!g) continue;
+    const tot = granTotals(g);
+    for (const k of doneRows(g)){
+      if (celebrated[key].has(k)) continue;
+      celebrated[key].add(k);
+      const nm = g.labels[k];
+      celebrateArea(key==="qua" ? (fr?`Quartier ${nm} terminé ! 🎉`:`${nm} — neighborhood complete! 🎉`)
+                  : key==="arr" ? (fr?`${nm}e arrondissement terminé ! 🎉`:`${nm}e arrondissement complete! 🎉`)
+                  : (fr?`${nm} : 100 % ! 🎉🎉`:`${nm} 100% complete! 🎉🎉`), tot[k]);
     }
   }
 }
@@ -1738,14 +1747,10 @@ function rebuildWithout(ei, resetCelebrations=false){
   const keep=revList.filter(k=>!removed.has(k)).map(k=>[k,edgeColor[k]]);
   revEdge.fill(0); revNode.fill(0); revFace.fill(0); edgeColor.fill(null);
   revList.length=0; faceList.length=0; anim.length=0; frontier.clear();
-  revEdgeCount=0; revKm=0; revArea=0; arrKm.fill(0); arrArea.fill(0); arrCntN.fill(0); quaKm.fill(0); rivKm.fill(0);
+  revEdgeCount=0; revKm=0; revArea=0;
   flashEdge=-1; flashT=0; selNode=-1; hoverEdge=-1;
   for(const [k,col] of keep){ reveal(k,true); if(col) edgeColor[k]=col; }
-  if(resetCelebrations){
-    lastPctMilestone=100*revEdgeCount/EDGES.length; celebratedArr.clear();
-    for(let k=0;k<NB;k++) if(arrTotKm[k]>0&&arrKm[k]/arrTotKm[k]>=.999) celebratedArr.add(k);
-    areaBaselines();
-  }
+  if(resetCelebrations) areaBaselines();
   fogDirty=true; save(); updateStats(true); draw();
 }
 function forgetStreet(ei){                          // stays hidden, even from room history, until you type it again
@@ -1859,8 +1864,6 @@ function begin(lat, lon){
   }
   restoreAssisted();
   // set milestone/celebration baselines from restored progress so we don't re-toast on load
-  lastPctMilestone = 100*revEdgeCount/EDGES.length;
-  for (let k=0;k<NB;k++) if (arrTotKm[k]>0 && arrKm[k]/arrTotKm[k]>=0.999) celebratedArr.add(k);
   areaBaselines();
   updateStats(true);                              // instant (no count-up from zero on load)
   setSide(!MOBILE);                               // sidebar open on desktop, folded by default on phones
@@ -2050,8 +2053,8 @@ function clearBoard(){                             // wipe all reveal/progress s
   edgeColor.fill(null); debugHidden.clear();
   revEdge.fill(0); revNode.fill(0); revFace.fill(0);
   revList.length=0; faceList.length=0; anim.length=0; frontier.clear();
-  revEdgeCount=0; revKm=0; revArea=0; arrKm.fill(0); arrArea.fill(0); arrCntN.fill(0); quaKm.fill(0); rivKm.fill(0);
-  lastPctMilestone=0; celebratedArr.clear(); celebratedQua.clear(); celebratedRive.clear();
+  revEdgeCount=0; revKm=0; revArea=0;
+  areaBaselines();
   disp.streets=0; disp.km=0; disp.area=0;
 }
 function startDaily(){

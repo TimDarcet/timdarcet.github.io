@@ -6,7 +6,7 @@
 const TYPE = new Set(("rue ruelle avenue av place placette passage villa allee impasse boulevard boulevards bd "+
   "square route chemin chaussee cite acces quai quaie cour cours pont sortie port promenade galerie sentier "+
   "sente hameau esplanade parvis jardin jardins mail carrefour voie porte passerelle autoroute village "+
-  "coulee peristyle porche escalier balcon arcades manege rond butte carre marche terrasse rampe residence tunnel belvedere").split(" ").concat(["rond point"]));
+  "coulee peristyle porche escalier balcon arcades manege rond butte carre marche terrasse rampe residence tunnel belvedere souterrain allees parc bassin patio").split(" ").concat(["rond point"]));
 const CONN = new Set("de du des la le les l d aux au a en et sur".split(" "));
 const U=["","un","deux","trois","quatre","cinq","six","sept","huit","neuf","dix","onze","douze","treize",
   "quatorze","quinze","seize","dix-sept","dix-huit","dix-neuf"];

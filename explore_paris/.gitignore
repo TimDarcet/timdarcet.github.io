@@ -1,20 +1,10 @@
 # build inputs & generated caches — not part of the deployed site
-.ign-venv/
 __pycache__/
 *.pyc
 
-# IGN BD TOPO source archive + extraction (build_ign.py input; re-downloadable)
-bdtopo_d075.7z
-bdtopo_d075_extracted/
-
-# OSM Overpass raw caches (build.py input; re-fetched if absent)
-paris_raw.json
-arr_raw.json
-voies_raw.json
-plaza_raw.json
-
-# Paris Open Data quartier boundaries (build_areas.py input; re-fetched if absent)
-quartiers.geojson
+# Paris Open Data street network raw exports (build.py input; re-fetched if absent)
+troncon_voie_raw.geojson
+voie_raw.geojson
 
 # Paris Open Data commemorative plaques raw API cache (build_plaques.py input; re-fetched if absent)
 plaques_raw.json
