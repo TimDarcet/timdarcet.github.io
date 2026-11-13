@@ -17,8 +17,8 @@
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html, body { height: 100%; height: 100dvh; overflow: hidden; background: #e9edf2;
                font-family: ui-sans-serif, system-ui, "Segoe UI", Roboto, sans-serif; }
-  #map { position: absolute; inset: 0; background: #e9edf2; }
-  #map .basemap { filter: grayscale(1); }
+  #map { position: absolute; inset: 0; background: #efe3c4; }
+  #map .basemap { filter: grayscale(1) sepia(0.7) saturate(1.3); }
   #fog { position: absolute; inset: 0; z-index: 400; pointer-events: none; }
   /* depth: soft inner shadow so the fogged map feels recessed under the clear areas */
   #vignette { position: absolute; inset: 0; z-index: 401; pointer-events: none;
@@ -586,12 +586,16 @@ function loadDebugHidden(){
   } catch(e){}
 }
 loadDebugHidden();
-function save(){
-  if (daily) return;
-  // store street IDENTITY (name + representative point) + finder colour, not raw indices, so a future
-  // rebuild heals and colours survive a reconnect before the room history has replayed
-  const s = revList.map(ei => { const p=edgePoint(ei); return [EDGES[ei].n, p[0], p[1], edgeColor[ei]]; });
-  try { localStorage.setItem(SAVE_KEY, JSON.stringify({ v: DATA_VERSION, s })); } catch(e){}
+let saveQueued = false;
+function save(){                                  // coalesced: a guess revealing many segments serializes once, at the end of the task
+  if (daily || saveQueued) return; saveQueued = true;
+  queueMicrotask(()=>{
+    saveQueued = false; if (daily) return;
+    // store street IDENTITY (name + representative point) + finder colour, not raw indices, so a future
+    // rebuild heals and colours survive a reconnect before the room history has replayed
+    const s = revList.map(ei => { const p=edgePoint(ei); return [EDGES[ei].n, p[0], p[1], edgeColor[ei]]; });
+    try { localStorage.setItem(SAVE_KEY, JSON.stringify({ v: DATA_VERSION, s })); } catch(e){}
+  });
 }
 function loadSave(){ try { return JSON.parse(localStorage.getItem(SAVE_KEY)); } catch(e){ return null; } }
 function saveHasProgress(x){ return Array.isArray(x) ? x.length>0 : !!(x && x.s && x.s.length); }
@@ -680,7 +684,7 @@ function reveal(ei, replay){
     if (open) frontier.add(ni); else frontier.delete(ni);
   }
   const filled = checkFaces(ei, replay);
-  fogDirty = true;                                 // geometry changed -> rebuild cached fog
+  fogDirty = true; revPaths = null;                // geometry changed -> rebuild cached fog + paths
   // multiplayer: broadcast our own live discoveries; remote reveals are tinted by their finder
   if (Sync.code && !daily && !assisting && !srs.on){
     if (applyingRemote){ edgeColor[ei] = remoteColor; }
@@ -723,47 +727,35 @@ let S = 1, Tx = 0, Ty = 0;                        // current-frame affine (world
 let visMinX, visMinY, visMaxX, visMaxY;           // current-frame visible world bbox (with margin)
 
 function precompute(){
-  const eb = [], fb = [];
-  const e = EDGES.map((ed, ei)=>{
-    let mnx=1e18,mny=1e18,mxx=-1e18,mxy=-1e18;
-    const paths = ed.p.map(path=>{
-      const a = new Float64Array(path.length*2);
-      for (let k=0;k<path.length;k++){
-        const q = map.project([path[k][0], path[k][1]], REFZ);
-        a[2*k]=q.x; a[2*k+1]=q.y;
-        if(q.x<mnx)mnx=q.x; if(q.x>mxx)mxx=q.x; if(q.y<mny)mny=q.y; if(q.y>mxy)mxy=q.y;
-      }
-      return a;
-    });
-    eb[ei]=[mnx,mny,mxx,mxy]; return paths;
-  });
-  const n = new Float64Array(NODES.length*2);
-  for (let i=0;i<NODES.length;i++){ const q=map.project([NODES[i][0],NODES[i][1]], REFZ); n[2*i]=q.x; n[2*i+1]=q.y; }
-  const f = FACES.map((fc, fi)=>{                   // rings: [outer, holes...]; the outer ring bounds them all
-    let mnx=1e18,mny=1e18,mxx=-1e18,mxy=-1e18;
-    const rings = fc.p.map(ring=>{
-      const a = new Float64Array(ring.length*2);
-      for (let k=0;k<ring.length;k++){
-        const q = map.project([ring[k][0], ring[k][1]], REFZ);
-        a[2*k]=q.x; a[2*k+1]=q.y;
-        if(q.x<mnx)mnx=q.x; if(q.x>mxx)mxx=q.x; if(q.y<mny)mny=q.y; if(q.y>mxy)mxy=q.y;
-      }
-      return a;
-    });
-    fb[fi]=[mnx,mny,mxx,mxy]; return rings;
-  });
-  const pl = new Float64Array(PLAQUES.length*2);
-  for (let i=0;i<PLAQUES.length;i++){ const q=map.project([PLAQUES[i].la, PLAQUES[i].lo], REFZ); pl[2*i]=q.x; pl[2*i+1]=q.y; }
-  const su = new Float64Array(SUCETTES.length*2);
-  for (let i=0;i<SUCETTES.length;i++){ const q=map.project([SUCETTES[i].la, SUCETTES[i].lo], REFZ); su[2*i]=q.x; su[2*i+1]=q.y; }
-  PX = { e, eb, n, f, fb, pl, su };
+  const o = map.project([48.8566, 2.3522], REFZ);   // world origin at Paris: keeps coords small enough for float32 Path2Ds
+  const flat = pts => {                             // [[lat,lon]...] -> [x0,y0,x1,y1...] world px
+    const a = new Float64Array(pts.length*2);
+    pts.forEach(([la,lo],k)=>{ const q=map.project([la,lo], REFZ); a[2*k]=q.x-o.x; a[2*k+1]=q.y-o.y; });
+    return a;
+  };
+  const bbox = rings => {
+    const b = [1e18,1e18,-1e18,-1e18];
+    for (const a of rings) for (let k=0;k<a.length;k+=2){
+      b[0]=Math.min(b[0],a[k]); b[1]=Math.min(b[1],a[k+1]); b[2]=Math.max(b[2],a[k]); b[3]=Math.max(b[3],a[k+1]);
+    }
+    return b;
+  };
+  const orient = (a, hole) => {                     // outer rings clockwise, holes counter-clockwise: faces then batch into one nonzero fill
+    let s = 0; for (let i=0,j=a.length-2;i<a.length;j=i,i+=2) s += a[j]*a[i+1]-a[i]*a[j+1];
+    if ((s<0) !== hole) for (let i=0,j=a.length-2;i<j;i+=2,j-=2){ [a[i],a[j]]=[a[j],a[i]]; [a[i+1],a[j+1]]=[a[j+1],a[i+1]]; }
+    return a;
+  };
+  const e = EDGES.map(ed=>ed.p.map(flat));
+  const f = FACES.map(fc=>fc.p.map((ring,i)=>orient(flat(ring), i>0)));   // rings: [outer, holes...]
+  PX = { o, e, eb: e.map(bbox), n: flat(NODES), f, fb: f.map(bbox),
+         pl: flat(PLAQUES.map(p=>[p.la,p.lo])), su: flat(SUCETTES.map(p=>[p.la,p.lo])) };
 }
 function updateXform(){                            // recompute affine + visible bbox for the current view (2 Leaflet calls)
   const z = map.getZoom();
   S = Math.pow(2, z - REFZ);
   const c = map.getCenter(), cll = [c.lat, c.lng];
   const cp = map.latLngToContainerPoint(cll), cw = map.project(cll, REFZ);
-  Tx = cp.x - cw.x*S; Ty = cp.y - cw.y*S;
+  Tx = cp.x - (cw.x-PX.o.x)*S; Ty = cp.y - (cw.y-PX.o.y)*S;
   const m = 60;                                    // margin so edge geometry near borders still draws
   visMinX = (-m - Tx)/S; visMaxX = (W+m - Tx)/S;
   visMinY = (-m - Ty)/S; visMaxY = (H+m - Ty)/S;
@@ -922,18 +914,39 @@ function goToEdge(ei){                             // from the recent-finds list
 }
 
 // ---- render fog + reveal overlay -----------------------------------------
-function strokePathsG(g, ei){                      // add this edge's polylines to context g's path
+function strokePathsG(g, ei, s=S, tx=Tx, ty=Ty){  // add this edge's polylines to path g (screen px by default, world px with s=1,tx=ty=0)
   for (const a of PX.e[ei]){
-    g.moveTo(a[0]*S+Tx, a[1]*S+Ty);
-    for (let k=1;k<a.length/2;k++) g.lineTo(a[2*k]*S+Tx, a[2*k+1]*S+Ty);
+    g.moveTo(a[0]*s+tx, a[1]*s+ty);
+    for (let k=1;k<a.length/2;k++) g.lineTo(a[2*k]*s+tx, a[2*k+1]*s+ty);
   }
 }
-function tracePolyG(g, rings){                      // add a face's rings to context g's path (fill "evenodd" for holes)
+function tracePolyG(g, rings, s=S, tx=Tx, ty=Ty){   // add a face's rings to path g (fill "evenodd" for holes)
   for (const a of rings){
-    g.moveTo(a[0]*S+Tx, a[1]*S+Ty);
-    for (let k=1;k<a.length/2;k++) g.lineTo(a[2*k]*S+Tx, a[2*k+1]*S+Ty);
+    g.moveTo(a[0]*s+tx, a[1]*s+ty);
+    for (let k=1;k<a.length/2;k++) g.lineTo(a[2*k]*s+tx, a[2*k+1]*s+ty);
     g.closePath();
   }
+}
+// Everything revealed, as world-px Path2Ds grouped into ~3 km tiles (culled per tile) with streets batched by
+// ink colour and width: a fog rebuild is a few dozen fill/stroke calls instead of one per street.
+// Rebuilt only when the revealed set or its colours change (revPaths = null).
+let revPaths = null;
+function buildRevPaths(){
+  const tiles = new Map(), tileOf = bb => {
+    const k = Math.floor(bb[0]/2048)+","+Math.floor(bb[1]/2048);
+    let T = tiles.get(k);
+    if (!T) tiles.set(k, T = { bb:[1e18,1e18,-1e18,-1e18], faces:new Path2D(), streets:new Path2D(), ink:{} });
+    T.bb = [Math.min(T.bb[0],bb[0]), Math.min(T.bb[1],bb[1]), Math.max(T.bb[2],bb[2]), Math.max(T.bb[3],bb[3])];
+    return T;
+  };
+  for (const fi of faceList) tracePolyG(tileOf(PX.fb[fi]).faces, PX.f[fi], 1, 0, 0);
+  for (const ei of revList){
+    const T = tileOf(PX.eb[ei]), col = edgeColor[ei] || "rgba(40,54,74,0.72)";       // finder's colour in a room, else default ink
+    const w = Math.round(10*(0.8 + Math.min(1.1, EDGES[ei].k*0.6)))/10;               // ink width class, longer streets bolder
+    const ink = T.ink[col+w] ||= { col, w, p:new Path2D() };
+    strokePathsG(T.streets, ei, 1, 0, 0); strokePathsG(ink.p, ei, 1, 0, 0);
+  }
+  return [...tiles.values()];
 }
 function strokePaths(ei){ strokePathsG(ctx, ei); } // overlays draw on the main context
 function tracePoly(a){ tracePolyG(ctx, a); }
@@ -963,17 +976,16 @@ function renderFog(){
   fblur.setAttribute("stdDeviation", (brush*edgeCfg.blur).toFixed(1));  // final softening
   const edgeFilter = (dragging || MOBILE) ? `blur(${(brush*0.5).toFixed(1)}px)` : "url(#fogEdge)";
 
-  // bake the raw reveal shape into edgeCv (NO filter here) with a separate fill() per polygon —
-  // batching into one path uses nonzero winding, so overlapping faces could cancel and leave a
-  // hole. The feathering filter is applied once, later, when blitting edgeCv.
+  // bake the raw reveal shape into edgeCv (NO filter here); faces fill nonzero (rings are oriented in
+  // precompute, so holes cut and overlaps never cancel). The feathering filter is applied once, later, when blitting edgeCv.
+  revPaths ||= buildRevPaths();
+  const tiles = revPaths.filter(T=>onScreen(T.bb)), world = c => c.setTransform(DPR*S,0,0,DPR*S,DPR*Tx,DPR*Ty);
   const e = ectx;
   e.setTransform(DPR,0,0,DPR,0,0); e.globalCompositeOperation="source-over"; e.clearRect(0,0,W,H);
   e.lineCap="round"; e.lineJoin="round"; e.filter = "none";
-  e.fillStyle = "rgba(214,168,74,1)"; e.strokeStyle = "rgba(214,168,74,1)"; e.lineWidth = brush;
-  for (const fi of faceList) if (onScreen(PX.fb[fi])){ e.beginPath(); tracePolyG(e, PX.f[fi]); e.fill("evenodd"); }
-  e.beginPath();
-  for (const ei of revList) if (onScreen(PX.eb[ei])) strokePathsG(e, ei);
-  e.stroke();
+  e.fillStyle = "rgba(214,168,74,1)"; e.strokeStyle = "rgba(214,168,74,1)"; e.lineWidth = brush/S;
+  world(e);
+  for (const T of tiles){ e.fill(T.faces); e.stroke(T.streets); }
 
   // 2. gilded coastline: the baked shape, spread outward by a blur -> soft gold halo around the hole
   g.save();
@@ -990,17 +1002,28 @@ function renderFog(){
   g.filter = "none"; g.restore();
   g.globalCompositeOperation = "source-over";
 
-  // 4. faint warm tint on cleared blocks + revealed streets as ink
-  for (const fi of faceList){
-    if (!onScreen(PX.fb[fi])) continue;
-    g.beginPath(); tracePolyG(g, PX.f[fi]); g.fillStyle = "rgba(214,168,74,0.07)"; g.fill("evenodd");
+  // 4. faint warm tint on cleared blocks + revealed streets as ink (ground-proportional width)
+  world(g);
+  g.fillStyle = "rgba(214,168,74,0.07)";
+  for (const T of tiles) g.fill(T.faces);
+  for (const T of tiles) for (const k in T.ink){
+    const {col, w, p} = T.ink[k];
+    g.strokeStyle = col; g.lineWidth = Math.max(0.8, brush*0.22*w)/S; g.stroke(p);
   }
-  for (const ei of revList){
-    if (!onScreen(PX.eb[ei])) continue;
-    const w = brush * 0.22 * (0.8 + Math.min(1.1, EDGES[ei].k*0.6));   // ground-proportional ink width
-    g.strokeStyle = edgeColor[ei] || "rgba(40,54,74,0.72)";           // finder's colour in a room, else default ink
-    g.lineWidth = Math.max(0.8, w);
-    g.beginPath(); strokePathsG(g, ei); g.stroke();
+  g.setTransform(DPR,0,0,DPR,0,0);
+
+  // 5. names of revealed streets at close zoom (reinforces learning) — baked here, not redrawn on every hover frame
+  if (z >= 16){
+    g.font = "600 12px ui-sans-serif,system-ui,sans-serif"; g.textAlign="center"; g.textBaseline="middle";
+    g.shadowColor="#fff"; g.shadowBlur=5; g.fillStyle="rgba(20,40,90,0.95)";
+    for (const ei of revList){
+      if (!onScreen(PX.eb[ei])) continue;
+      const a = PX.e[ei][0], mk = ((a.length/2)>>1);
+      const x = a[2*mk]*S+Tx, y = a[2*mk+1]*S+Ty;
+      if (x<0||x>W||y<0||y>H) continue;
+      g.fillText(EDGES[ei].n, x, y);
+    }
+    g.shadowBlur=0;
   }
   fogDirty = false;
 }
@@ -1140,28 +1163,18 @@ function draw(){
       ctx.beginPath(); ctx.moveTo(x,y); ctx.lineTo(p.x,p.y); ctx.stroke();
     }
   }
-  for (const ni of frontier){
+  const junction = (ni, r) => {                  // add one marker to the current path (all batched into one fill + stroke)
     const x = PX.n[2*ni]*S+Tx, y = PX.n[2*ni+1]*S+Ty;
-    if (x<-10||x>W+10||y<-10||y>H+10) continue;
-    const sel = (ni===selNode);
-    ctx.strokeStyle = sel ? "rgba(26,115,232,1)" : "rgba(245,158,11,0.95)";
-    ctx.lineWidth = (sel ? 2.5 : 1.5) * ms; ctx.fillStyle = sel ? "rgba(26,115,232,0.25)" : "rgba(255,255,255,0.9)";
-    ctx.beginPath(); ctx.arc(x,y, sel ? nr*1.6 : nr, 0,7); ctx.fill(); ctx.stroke();
-  }
-
-
-  // 6. names of revealed streets at close zoom (reinforces learning)
-  if (z >= 16){
-    ctx.font = "600 12px ui-sans-serif,system-ui,sans-serif"; ctx.textAlign="center"; ctx.textBaseline="middle";
-    ctx.shadowColor="#fff"; ctx.shadowBlur=5; ctx.fillStyle="rgba(20,40,90,0.95)";
-    for (const ei of revList){
-      if (!onScreen(PX.eb[ei])) continue;
-      const a = PX.e[ei][0], mk = ((a.length/2)>>1);
-      const x = a[2*mk]*S+Tx, y = a[2*mk+1]*S+Ty;
-      if (x<0||x>W||y<0||y>H) continue;
-      ctx.fillText(EDGES[ei].n, x, y);
-    }
-    ctx.shadowBlur=0;
+    if (x>-10 && x<W+10 && y>-10 && y<H+10){ ctx.moveTo(x+r, y); ctx.arc(x, y, r, 0, 7); }
+  };
+  ctx.beginPath();
+  for (const ni of frontier) if (ni!==selNode) junction(ni, nr);
+  ctx.strokeStyle = "rgba(245,158,11,0.95)"; ctx.lineWidth = 1.5*ms; ctx.fillStyle = "rgba(255,255,255,0.9)";
+  ctx.fill(); ctx.stroke();
+  if (frontier.has(selNode)){
+    ctx.beginPath(); junction(selNode, nr*1.6);
+    ctx.strokeStyle = "rgba(26,115,232,1)"; ctx.lineWidth = 2.5*ms; ctx.fillStyle = "rgba(26,115,232,0.25)";
+    ctx.fill(); ctx.stroke();
   }
 
   // 6c. commemorative plaques (opendata.paris.fr): small bronze dots, hover for the transcribed text
@@ -1751,7 +1764,7 @@ function rebuildWithout(ei, resetCelebrations=false){
   flashEdge=-1; flashT=0; selNode=-1; hoverEdge=-1;
   for(const [k,col] of keep){ reveal(k,true); if(col) edgeColor[k]=col; }
   if(resetCelebrations) areaBaselines();
-  fogDirty=true; save(); updateStats(true); draw();
+  fogDirty=true; revPaths=null; save(); updateStats(true); draw();
 }
 function forgetStreet(ei){                          // stays hidden, even from room history, until you type it again
   setDebugHidden(ei, true); clearAssisted(ei);
@@ -1839,7 +1852,8 @@ function begin(lat, lon){
   L.control.zoom({ position:"topleft" }).addTo(map);
   precompute();                                    // bake world-pixel geometry + bboxes once
   resize();
-  map.on("move zoom viewreset", ()=>{ fogDirty=true; draw(); });
+  let drawQueued = false;                          // one setView fires move+zoom+viewreset: redraw once, still before paint
+  map.on("move zoom viewreset", ()=>{ fogDirty=true; if (!drawQueued){ drawQueued=true; queueMicrotask(()=>{ drawQueued=false; draw(); }); } });
   map.on("dragstart", ()=>{ follow=false; dragging=true; });
   map.on("dragend", ()=>{ dragging=false; fogDirty=true; draw(); });
   map.on("zoomstart", ()=>{ dragging=true; });
@@ -2052,7 +2066,7 @@ function showDaily(){
 function clearBoard(){                             // wipe all reveal/progress state (shared by the daily entry points)
   edgeColor.fill(null); debugHidden.clear();
   revEdge.fill(0); revNode.fill(0); revFace.fill(0);
-  revList.length=0; faceList.length=0; anim.length=0; frontier.clear();
+  revList.length=0; faceList.length=0; anim.length=0; frontier.clear(); revPaths=null;
   revEdgeCount=0; revKm=0; revArea=0;
   areaBaselines();
   disp.streets=0; disp.km=0; disp.area=0;
@@ -2190,7 +2204,7 @@ function applyRemoteFound(v, live){                // v = {n, la, lo, by, c}; li
   if (debugHidden.has(ei)) return;                // local debug overrides win over grow-only room history
   const col = (Sync.me && v.by === Sync.me.id) ? null : v.c;
   if (revEdge[ei]){                               // already have it (union): still let the finder's colour stick
-    if (col && edgeColor[ei] !== col){ edgeColor[ei] = col; fogDirty = true; if (live){ save(); draw(); } }
+    if (col && edgeColor[ei] !== col){ edgeColor[ei] = col; fogDirty = true; revPaths = null; if (live){ save(); draw(); } }
     return;
   }
   applyingRemote = true; remoteColor = col;
