@@ -424,6 +424,7 @@ const ARR = D.arr || [];
 const TOTAL_AREA = FACES.reduce((s,f)=>s+(f.m||0), 0);     // m²
 
 const SAVE_KEY = "paris-streets-progress";
+const TEST_REVEAL = +new URLSearchParams(location.search).get("reveal") || 0;   // ?reveal=0.6: unsaved, offline test board with a random 60% of streets revealed
 const DEBUG_HIDE_KEY = "paris-debug-hidden";
 const LEARN_KEY = "paris-streets-learning", LEARN_DELAYS = [864e5, 36e5, 6e5]; // no hint, half name, full name
 const debugHidden = new Set();
@@ -588,7 +589,7 @@ function loadDebugHidden(){
 loadDebugHidden();
 let saveQueued = false;
 function save(){                                  // coalesced: a guess revealing many segments serializes once, at the end of the task
-  if (daily || saveQueued) return; saveQueued = true;
+  if (daily || TEST_REVEAL || saveQueued) return; saveQueued = true;
   queueMicrotask(()=>{
     saveQueued = false; if (daily) return;
     // store street IDENTITY (name + representative point) + finder colour, not raw indices, so a future
@@ -710,6 +711,8 @@ const cv = document.getElementById("fog"), ctx = cv.getContext("2d");
 const fogLayer = document.createElement("canvas"), fctx = fogLayer.getContext("2d");  // cached fog+streets
 const edgeCv = document.createElement("canvas"), ectx = edgeCv.getContext("2d");      // filtered reveal shape (baked once/rebuild)
 let fogDirty = true;                             // rebuild the cached fog layer on next draw
+let fogS = 0, fogTx = 0, fogTy = 0;              // view the cached fog layer was rendered at
+let settle = 0;                                  // view moving (drag/wheel/pinch/flight): move the cached fog instead, re-render once still 150 ms
 const MOBILE = matchMedia("(pointer:coarse)").matches || innerWidth < 620;   // phone/tablet: lighter rendering
 const fdisp = document.getElementById("fdisp"), fblur = document.getElementById("fblur");
 const fturb = document.getElementById("fturb");
@@ -848,7 +851,7 @@ function resize(){
   for (const c of [cv, fogLayer, edgeCv]){ c.width = W*DPR; c.height = H*DPR; }
   cv.style.width = W+"px"; cv.style.height = H+"px";
   for (const cc of [ctx, fctx, ectx]) cc.setTransform(DPR,0,0,DPR,0,0);
-  fogDirty = true;
+  fogDirty = true; fogS = 0;
   makeCloud();
 }
 
@@ -1025,7 +1028,39 @@ function renderFog(){
     }
     g.shadowBlur=0;
   }
-  fogDirty = false;
+
+  // 6. markers, baked too (thousands of them on a big board): frontier junctions — shown while a node still has an
+  //    unrevealed edge; click two to connect them — then commemorative plaques (bronze dots) and Histoire de Paris
+  //    panels (pelle silhouettes) once their street is revealed; hover either for its text
+  const ms = markerScale(), nr = 4*ms, seen = (px, py) => px>=visMinX && px<=visMaxX && py>=visMinY && py<=visMaxY;
+  g.beginPath();
+  for (const ni of frontier) if (seen(PX.n[2*ni], PX.n[2*ni+1])){
+    const x = PX.n[2*ni]*S+Tx, y = PX.n[2*ni+1]*S+Ty; g.moveTo(x+nr, y); g.arc(x, y, nr, 0, 7);
+  }
+  g.strokeStyle = "rgba(245,158,11,0.95)"; g.lineWidth = 1.5*ms; g.fillStyle = "rgba(255,255,255,0.9)"; g.fill(); g.stroke();
+  g.beginPath();
+  PLAQUES.forEach((p,i)=>{
+    if (!revEdge[p.ei] || !seen(PX.pl[2*i], PX.pl[2*i+1])) return;
+    const sx=PX.pl[2*i]*S+Tx, sy=PX.pl[2*i+1]*S+Ty, r=2.4*ms;
+    g.moveTo(sx+r, sy); g.arc(sx, sy, r, 0, 6.2832);
+  });
+  g.fillStyle="rgba(150,90,40,0.7)"; g.fill(); g.lineWidth=ms; g.strokeStyle="rgba(255,244,230,0.75)"; g.stroke();
+  SUCETTES.forEach((p,i)=>{                         // capped at half the other markers' max size
+    if (revEdge[p.ei] && seen(PX.su[2*i], PX.su[2*i+1])) pelle(g, PX.su[2*i]*S+Tx, PX.su[2*i+1]*S+Ty, Math.min(ms, 1.5), false);
+  });
+  fogDirty = false; fogS = S; fogTx = Tx; fogTy = Ty;
+}
+function pelle(g, sx, sy, sc, hov){                 // "sucette Starck" silhouette from the editor, bottom tip at (sx,sy): right half then its mirror
+  const H=20*sc, U=5.6*sc, P=SUCETTE_SHAPE;
+  g.beginPath(); g.moveTo(sx+P[0][0]*U, sy-P[0][1]*H);
+  for (let i=1;i<P.length;i++) g.lineTo(sx+P[i][0]*U, sy-P[i][1]*H);          // up the right side to the apex
+  for (let i=P.length-2;i>=0;i--) g.lineTo(sx-P[i][0]*U, sy-P[i][1]*H);       // mirror back down the left
+  g.closePath();
+  g.fillStyle = hov ? "#3a322a" : "#25201b"; g.fill();
+  g.lineWidth = (hov?1.4:1)*sc; g.strokeStyle = hov ? "#ffd98a" : "rgba(232,214,178,0.9)"; g.stroke();
+  g.strokeStyle="#c0392b"; g.lineWidth=1.2*sc;      // red "Histoire de Paris" band
+  const wb=0.62*U*Math.max(...P.map(p=>p[0])), yb=sy-SUCETTE_BAND*H;
+  g.beginPath(); g.moveTo(sx-wb,yb); g.lineTo(sx+wb,yb); g.stroke();
 }
 function markerScale(){                             // junction/plaque/sucette markers scale with zoom, like the ink.
   const mpp = 156543.03392 * Math.cos(map.getCenter().lat*Math.PI/180) / Math.pow(2, map.getZoom());
@@ -1052,8 +1087,12 @@ function draw(){
   const mPerPx = 156543.03392 * Math.cos(map.getCenter().lat*Math.PI/180) / Math.pow(2, z);
   const brush = 18 / mPerPx;                         // ground-invariant unit (18 m in screen px)
   const ms = markerScale();                          // shared marker scale for this frame
-  if (fogDirty) renderFog();                        // rebuild cached fog only when needed
+  if (fogDirty && !(settle && fogS)) renderFog();  // rebuild cached fog when needed, but not while the view is moving
+  const k = S/fogS, ox = DPR*(Tx-fogTx*k), oy = DPR*(Ty-fogTy*k);   // map the cached layer from its view to this one, like Leaflet's tile zoom
   ctx.setTransform(1,0,0,1,0,0); ctx.clearRect(0,0,cv.width,cv.height);
+  ctx.beginPath(); ctx.rect(0,0,cv.width,cv.height); ctx.rect(ox, oy, fogLayer.width*k, fogLayer.height*k);
+  ctx.fillStyle = "#ebe9e4"; ctx.fill("evenodd");  // plain fog wherever the moved layer doesn't reach
+  ctx.setTransform(k,0,0,k,ox,oy);
   ctx.drawImage(fogLayer, 0, 0);                   // blit the cached fog (cheap)
   ctx.setTransform(DPR,0,0,DPR,0,0);
   ctx.lineCap = "round"; ctx.lineJoin = "round";
@@ -1163,63 +1202,18 @@ function draw(){
       ctx.beginPath(); ctx.moveTo(x,y); ctx.lineTo(p.x,p.y); ctx.stroke();
     }
   }
-  const junction = (ni, r) => {                  // add one marker to the current path (all batched into one fill + stroke)
-    const x = PX.n[2*ni]*S+Tx, y = PX.n[2*ni+1]*S+Ty;
-    if (x>-10 && x<W+10 && y>-10 && y<H+10){ ctx.moveTo(x+r, y); ctx.arc(x, y, r, 0, 7); }
-  };
-  ctx.beginPath();
-  for (const ni of frontier) if (ni!==selNode) junction(ni, nr);
-  ctx.strokeStyle = "rgba(245,158,11,0.95)"; ctx.lineWidth = 1.5*ms; ctx.fillStyle = "rgba(255,255,255,0.9)";
-  ctx.fill(); ctx.stroke();
-  if (frontier.has(selNode)){
-    ctx.beginPath(); junction(selNode, nr*1.6);
+  if (frontier.has(selNode)){                    // the other junctions are baked into the fog layer
+    const x = PX.n[2*selNode]*S+Tx, y = PX.n[2*selNode+1]*S+Ty;
+    ctx.beginPath(); ctx.arc(x, y, nr*1.6, 0, 7);
     ctx.strokeStyle = "rgba(26,115,232,1)"; ctx.lineWidth = 2.5*ms; ctx.fillStyle = "rgba(26,115,232,0.25)";
     ctx.fill(); ctx.stroke();
   }
-
-  // 6c. commemorative plaques (opendata.paris.fr): small bronze dots, hover for the transcribed text
-  if (PX.pl && PLAQUES.length){
-    ctx.beginPath();
-    for (let i=0;i<PLAQUES.length;i++){
-      if (i===hoverPlaque || !revEdge[PLAQUES[i].ei]) continue;   // only once its street is revealed
-      const px=PX.pl[2*i], py=PX.pl[2*i+1];
-      if (px<visMinX||px>visMaxX||py<visMinY||py>visMaxY) continue;
-      const sx=px*S+Tx, sy=py*S+Ty, r=2.4*ms;
-      ctx.moveTo(sx+r, sy); ctx.arc(sx, sy, r, 0, 6.2832);
-    }
-    ctx.fillStyle="rgba(150,90,40,0.7)"; ctx.fill();
-    ctx.lineWidth=ms; ctx.strokeStyle="rgba(255,244,230,0.75)"; ctx.stroke();
-    if (hoverPlaque>=0){                             // draw the hovered dot larger, on top
-      const sx=PX.pl[2*hoverPlaque]*S+Tx, sy=PX.pl[2*hoverPlaque+1]*S+Ty;
-      ctx.beginPath(); ctx.arc(sx, sy, 5*ms, 0, 6.2832);
-      ctx.fillStyle="#e0a92e"; ctx.fill(); ctx.lineWidth=2*ms; ctx.strokeStyle="#fff"; ctx.stroke();
-    }
+  if (hoverPlaque>=0){                             // hovered plaque dot: larger, on top of the baked ones
+    const sx=PX.pl[2*hoverPlaque]*S+Tx, sy=PX.pl[2*hoverPlaque+1]*S+Ty;
+    ctx.beginPath(); ctx.arc(sx, sy, 5*ms, 0, 6.2832);
+    ctx.fillStyle="#e0a92e"; ctx.fill(); ctx.lineWidth=2*ms; ctx.strokeStyle="#fff"; ctx.stroke();
   }
-
-  // 6c-bis. Histoire de Paris panels: a little pelle/"sucette Starck" silhouette (bottom tip at the spot),
-  //         more notable than the plaque dots; hover for the recovered panel text.
-  if (PX.su && SUCETTES.length){
-    const pelle = (sx, sy, sc, hov) => {           // draw the editor silhouette: right-half points then their mirror; bottom at (sx,sy)
-      const H=20*sc, U=5.6*sc, P=SUCETTE_SHAPE;
-      ctx.beginPath(); ctx.moveTo(sx+P[0][0]*U, sy-P[0][1]*H);
-      for (let i=1;i<P.length;i++) ctx.lineTo(sx+P[i][0]*U, sy-P[i][1]*H);          // up the right side to the apex
-      for (let i=P.length-2;i>=0;i--) ctx.lineTo(sx-P[i][0]*U, sy-P[i][1]*H);       // mirror back down the left
-      ctx.closePath();
-      ctx.fillStyle = hov ? "#3a322a" : "#25201b"; ctx.fill();
-      ctx.lineWidth = (hov?1.4:1)*sc; ctx.strokeStyle = hov ? "#ffd98a" : "rgba(232,214,178,0.9)"; ctx.stroke();
-      ctx.strokeStyle="#c0392b"; ctx.lineWidth=1.2*sc;   // red "Histoire de Paris" band
-      const wb=0.62*U*Math.max(...P.map(p=>p[0])), yb=sy-SUCETTE_BAND*H;
-      ctx.beginPath(); ctx.moveTo(sx-wb,yb); ctx.lineTo(sx+wb,yb); ctx.stroke();
-    };
-    const ssc = Math.min(ms, 1.5);                 // cap the sucette's max size at half the other markers' max
-    for (let i=0;i<SUCETTES.length;i++){
-      if (i===hoverSucette || !revEdge[SUCETTES[i].ei]) continue;   // only once its street is revealed
-      const px=PX.su[2*i], py=PX.su[2*i+1];
-      if (px<visMinX||px>visMaxX||py<visMinY||py>visMaxY) continue;
-      pelle(px*S+Tx, py*S+Ty, ssc, false);
-    }
-    if (hoverSucette>=0) pelle(PX.su[2*hoverSucette]*S+Tx, PX.su[2*hoverSucette+1]*S+Ty, ssc*1.4, true);
-  }
+  if (hoverSucette>=0) pelle(ctx, PX.su[2*hoverSucette]*S+Tx, PX.su[2*hoverSucette+1]*S+Ty, Math.min(ms, 1.5)*1.4, true);
 
   // 6d. daily route: pulse the goal street; when off-screen, a chevron at the border points to it
   if (daily && !dailyEnded && dailyTarget>=0){
@@ -1853,7 +1847,10 @@ function begin(lat, lon){
   precompute();                                    // bake world-pixel geometry + bboxes once
   resize();
   let drawQueued = false;                          // one setView fires move+zoom+viewreset: redraw once, still before paint
-  map.on("move zoom viewreset", ()=>{ fogDirty=true; if (!drawQueued){ drawQueued=true; queueMicrotask(()=>{ drawQueued=false; draw(); }); } });
+  map.on("move zoom viewreset", ()=>{
+    fogDirty=true; clearTimeout(settle); settle = setTimeout(()=>{ settle=0; draw(); }, 150);
+    if (!drawQueued){ drawQueued=true; queueMicrotask(()=>{ drawQueued=false; draw(); }); }
+  });
   map.on("dragstart", ()=>{ follow=false; dragging=true; });
   map.on("dragend", ()=>{ dragging=false; fogDirty=true; draw(); });
   map.on("zoomstart", ()=>{ dragging=true; });
@@ -1871,7 +1868,10 @@ function begin(lat, lon){
   if (window.visualViewport) window.visualViewport.addEventListener("resize", onViewport);
 
   let saved = loadSave();
-  if (saveHasProgress(saved)){
+  if (TEST_REVEAL){                                // reveal streets in random order until that share is found
+    const order = EDGES.map((_,i)=>[Math.random(), i]).sort((a,b)=>a[0]-b[0]);
+    for (const [,ei] of order) if (revEdgeCount < TEST_REVEAL*EDGES.length) reveal(ei, true);
+  } else if (saveHasProgress(saved)){
     restoreSave(saved);                            // replay + heal across data changes; no flash/save spam
   } else if (lat!=null){
     reveal(nearestEdge(lat, lon));
@@ -1889,7 +1889,7 @@ function begin(lat, lon){
 // always join a room so a shareable code is live. The room you're in IS your identity — solo just
 // means you're alone in it. An invite link wins; else rejoin the room you were last in; else make one.
 function maybeRejoin(){
-  if (daily || !Sync.available()) return;
+  if (daily || TEST_REVEAL || !Sync.available()) return;
   buildRoomPanel(); renderRoster({}, null);       // show the panel immediately (code fills in once connected)
   const link = (location.hash.match(/#room=([^&]+)/)||[])[1];
   const prev = Sync.saved();
@@ -2337,7 +2337,7 @@ function boot(){
     else chooser();
   };
 
-  if (saveHasProgress(saved)){ begin(48.8566, 2.3522); onboard(false); return; }  // have progress
+  if (saveHasProgress(saved) || TEST_REVEAL){ begin(48.8566, 2.3522); onboard(false); return; }  // have progress
   if (wantDaily){ begin(null, null); startDaily(); return; }              // daily seeds its own start
   if (navigator.geolocation)
     navigator.geolocation.getCurrentPosition(
